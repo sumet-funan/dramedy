@@ -69,6 +69,7 @@ test('reads the holdings form', () => {
       { ticker: 'BBB', shares: 0.5, total_cost_usd: 20 },
     ],
     errors: [],
+    problems: [],
   });
 });
 
@@ -117,6 +118,11 @@ test('a new stock needs its shares and cost', () => {
   assert.deepEqual(readHoldings([entry('BBB', '1', '', '-5')], saved).errors, ['BBB has no total cost']);
 });
 
+test('a problem points at its row, counting blank rows', () => {
+  const { problems } = readHoldings([entry('', '', ''), entry('AAA', '', '1')]);
+  assert.deepEqual(problems, [{ index: 1, message: 'AAA has no share count' }]);
+});
+
 test('skips blank rows', () => {
   const { rows, errors } = readHoldings([entry('', '', ''), entry('AAA', '1', '1')]);
   assert.deepEqual(errors, []);
@@ -137,7 +143,7 @@ test('rejects a loss larger than the cost', () => {
 
 test('flags an empty form, bad tickers, missing shares and duplicates', () => {
   assert.deepEqual(readHoldings([]).errors, ['Add at least one stock']);
-  assert.deepEqual(readHoldings([entry('', '1', '1')]).errors, ['A row needs a valid ticker']);
+  assert.deepEqual(readHoldings([entry('', '1', '1')]).errors, ['Row 1 needs a valid ticker']);
   assert.deepEqual(readHoldings([entry('AAA', '', '1')]).errors, ['AAA has no share count']);
   assert.deepEqual(
     readHoldings([entry('AAA', '1', '1'), entry('aaa', '1', '1')]).errors,

@@ -52,6 +52,8 @@ const state = {
   view: 'overview',
   stockFilter: 'all',
   addMode: 'trade',
+  holdingDraft: [],
+  holdingNote: '',
   tradeSearch: '',
   tradeType: '',
   openTrade: null,
@@ -709,6 +711,8 @@ function unrealizedCheck(entries) {
   return `\n\n${t('holdings.check', { amount: signedMoney(cents) })}`;
 }
 
+const RESULT_EXAMPLE = '-12.34';
+
 function holdingField(name, label, props = {}) {
   return h('label', { class: 'holding-field' },
     h('span', {}, label),
@@ -717,12 +721,37 @@ function holdingField(name, label, props = {}) {
     }));
 }
 
-function holdingRow() {
-  const row = h('li', { class: 'holding' },
+const fieldOf = (row, name) => row.querySelector(`[name=${name}]`);
+const tickerOf = (row) => fieldOf(row, 'ticker').value.trim().toUpperCase();
+
+const holdingEntry = (row) => Object.fromEntries(
+  [...row.querySelectorAll('input')].map((input) => [input.name, input.value.trim()]),
+);
+
+function holdingRow(saved, entry, onRemove) {
+  const hint = h('p', { class: 'holding-hint', hidden: true });
+
+  // A held stock shows its saved figures as placeholders, because leaving a
+  // field blank keeps exactly that figure.
+  const refresh = () => {
+    const ticker = tickerOf(row);
+    const held = saved[ticker];
+    row.classList.remove('bad');
+    hint.hidden = ticker === '';
+    hint.textContent = held
+      ? t('holdings.heldHint', { shares: held.shares.toLocaleString('en-US') })
+      : t('holdings.newHint');
+    fieldOf(row, 'shares').placeholder = held?.shares ?? t('form.required');
+    fieldOf(row, 'total').placeholder = held?.total ?? t('form.required');
+    fieldOf(row, 'unrealized').placeholder = held?.unrealized ?? RESULT_EXAMPLE;
+  };
+
+  const row = h('li', { class: 'holding', onInput: refresh },
     h('div', { class: 'holding-head' },
       h('input', {
         class: 'holding-ticker',
         name: 'ticker',
+        value: entry.ticker ?? '',
         placeholder: t('form.ticker'),
         'aria-label': t('form.ticker'),
         autocapitalize: 'characters',
@@ -733,36 +762,39 @@ function holdingRow() {
         class: 'holding-remove',
         type: 'button',
         'aria-label': t('holdings.remove'),
-        onClick: () => row.remove(),
+        onClick: () => onRemove(row),
       }, icon('close'))),
+    hint,
     h('div', { class: 'holding-fields' },
-      holdingField('shares', t('form.shares'), { min: '0', inputmode: 'decimal' }),
-      holdingField('total', t('holdings.total'), { min: '0', inputmode: 'decimal' }),
+      holdingField('shares', t('form.shares'), {
+        min: '0', inputmode: 'decimal', value: entry.shares ?? '',
+      }),
+      holdingField('total', t('holdings.total'), {
+        min: '0', inputmode: 'decimal', value: entry.total ?? '',
+      }),
       // No inputmode here, because the decimal keypad on iPhones has no minus key.
-      holdingField('unrealized', t('holdings.unrealized'))));
+      holdingField('unrealized', t('holdings.unrealized'), { value: entry.unrealized ?? '' })));
+  refresh();
   return row;
 }
-
-const holdingEntry = (row) => Object.fromEntries(
-  [...row.querySelectorAll('input')].map((input) => [input.name, input.value.trim()]),
-);
-
-const fieldOf = (row, name) => row.querySelector(`[name=${name}]`);
-const tickerOf = (row) => fieldOf(row, 'ticker').value.trim().toUpperCase();
 
 function savedHoldings() {
   const held = state.summary.stocks.filter((stock) => stock.fromHolding);
   return Object.fromEntries(held.map((stock) => [
     stock.ticker,
-    { shares: stock.sharesHeld, total: stock.costLeft / 100 },
+    {
+      shares: stock.sharesHeld,
+      total: stock.costLeft / 100,
+      unrealized: stock.unrealized === null ? undefined : stock.unrealized / 100,
+    },
   ]));
 }
 
-function rowFor(list, ticker) {
+function rowFor(list, ticker, newRow) {
   const rows = [...list.children];
   const row = rows.find((item) => tickerOf(item) === ticker)
     ?? rows.find((item) => tickerOf(item) === '')
-    ?? list.appendChild(holdingRow());
+    ?? list.appendChild(newRow({}));
   fieldOf(row, 'ticker').value = ticker;
   return row;
 }
@@ -770,10 +802,10 @@ function rowFor(list, ticker) {
 // Fills rows without saving, so a misread figure can be fixed first. The screen
 // has no share counts, so a held stock shows the count already saved. Returns
 // the stocks whose cost moved, because their share count may have moved too.
-function fillHoldings(list, stocks, saved) {
+function fillHoldings(list, stocks, saved, newRow) {
   const costChanged = [];
   for (const stock of stocks) {
-    const row = rowFor(list, stock.ticker);
+    const row = rowFor(list, stock.ticker, newRow);
     const held = saved[stock.ticker];
     const moved = held && Math.abs(held.total - stock.total) > COST_TOLERANCE_USD;
 
@@ -781,6 +813,7 @@ function fillHoldings(list, stocks, saved) {
     if (held) fieldOf(row, 'shares').value = held.shares;
     fieldOf(row, 'total').value = held && !moved ? held.total : stock.total;
     fieldOf(row, 'unrealized').value = stock.unrealized;
+    fieldOf(row, 'ticker').dispatchEvent(new Event('input', { bubbles: true }));
   }
   return costChanged;
 }
@@ -801,19 +834,65 @@ function imageSummary(stocks, costChanged, saved) {
   ].filter(Boolean).join(' ');
 }
 
-function holdingsForm() {
-  const list = h('ul', {}, holdingRow());
-  const note = h('p', { class: 'row-warning holding-note', role: 'status', hidden: true });
+// One line per stock, so the viewer can see what a save replaces before it does.
+function changeLine(row, typedResult, held) {
+  const { ticker, shares, total_cost_usd: total } = row;
+  if (!held) {
+    return t('holdings.newLine', {
+      ticker, shares: shares.toLocaleString('en-US'), cost: money(toCents(total)),
+    });
+  }
 
-  const addRow = () => {
-    const row = holdingRow();
-    list.append(row);
-    row.querySelector('input').focus();
+  const result = typedResult === '' ? held.unrealized : Number(typedResult);
+  const resultText = (value) => (value === undefined ? '—' : signedMoney(toCents(value)));
+  const changes = [
+    shares !== held.shares && t('holdings.sharesChange', { from: held.shares, to: shares }),
+    toCents(total) !== toCents(held.total) && t('holdings.costChange', {
+      from: money(toCents(held.total)), to: money(toCents(total)),
+    }),
+    result !== held.unrealized && t('holdings.resultChange', {
+      from: resultText(held.unrealized), to: resultText(result),
+    }),
+  ].filter(Boolean);
+
+  return `${ticker}: ${changes.join(' · ') || t('holdings.noChange')}`;
+}
+
+function holdingsForm() {
+  const saved = savedHoldings();
+
+  const saveDraft = () => {
+    state.holdingDraft = [...list.children].map(holdingEntry);
   };
 
+  const note = h('p', {
+    class: 'row-warning holding-note',
+    role: 'status',
+    hidden: !state.holdingNote,
+  }, state.holdingNote);
+
   const show = (text) => {
+    state.holdingNote = text;
     note.textContent = text;
-    note.hidden = false;
+    note.hidden = !text;
+  };
+
+  const removeRow = (row) => {
+    row.remove();
+    if (list.children.length === 0) list.append(newRow({}));
+    show('');
+    saveDraft();
+  };
+
+  const newRow = (entry) => holdingRow(saved, entry, removeRow);
+  const start = state.holdingDraft.length > 0 ? state.holdingDraft : [{}];
+  const list = h('ul', {}, start.map(newRow));
+
+  const addRow = () => {
+    const row = newRow({});
+    list.append(row);
+    row.querySelector('input').focus();
+    saveDraft();
   };
 
   const importImages = async (event) => {
@@ -829,47 +908,63 @@ function holdingsForm() {
       const stocks = [...new Map(
         texts.flatMap(readPortfolio).map((stock) => [stock.ticker, stock]),
       ).values()];
-      const saved = savedHoldings();
       show(stocks.length > 0
-        ? imageSummary(stocks, fillHoldings(list, stocks, saved), saved)
+        ? imageSummary(stocks, fillHoldings(list, stocks, saved, newRow), saved)
         : t('image.none'));
     } catch (error) {
       show(`${t('image.failed')} ${describeError(error)}`);
     }
   };
 
+  const markProblems = (problems) => {
+    const rows = [...list.children];
+    for (const { index, message } of problems) {
+      rows[index].classList.add('bad');
+      const hint = rows[index].querySelector('.holding-hint');
+      hint.textContent = message;
+      hint.hidden = false;
+    }
+    if (problems.length > 0) rows[problems[0].index].scrollIntoView({ block: 'center' });
+  };
+
   const submit = (event) => {
     event.preventDefault();
     const entries = [...list.children].map(holdingEntry);
-    const { rows, errors } = readHoldings(entries, savedHoldings());
+    const { rows, errors, problems } = readHoldings(entries, saved);
 
     // Shown in place, because rendering again would throw away what was typed.
     if (errors.length > 0) {
       show(t('holdings.failed', { errors: listErrors(errors) }));
+      markProblems(problems);
       return;
     }
-    note.hidden = true;
+    show('');
 
-    const tickers = rows.map((row) => row.ticker).join(', ');
-    if (confirm(`${t('holdings.confirm', { tickers })}${unrealizedCheck(entries)}`)) {
-      run(() => state.store.saveHoldings(rows), t('holdings.saved', { count: rows.length }));
+    const typed = Object.fromEntries(entries.map((entry) => [entry.ticker.toUpperCase(), entry.unrealized]));
+    const lines = rows.map((row) => changeLine(row, typed[row.ticker], saved[row.ticker]));
+    if (confirm(`${t('holdings.confirm')}\n\n${lines.join('\n')}${unrealizedCheck(entries)}`)) {
+      run(() => state.store.saveHoldings(rows), () => {
+        state.holdingDraft = [];
+        return t('holdings.saved', { count: rows.length });
+      });
     }
   };
 
-  return section(null, h('form', { class: 'card', onSubmit: submit },
-    list,
-    note,
-    h('label', { class: 'row row-button action' }, t('image.import'), h('input', {
-      class: 'file-input',
-      type: 'file',
-      accept: 'image/*',
-      multiple: true,
-      'aria-label': t('image.import'),
-      onChange: importImages,
-    })),
-    h('button', { class: 'row row-button action', type: 'button', onClick: addRow }, t('holdings.add')),
-    h('button', { class: 'row row-button action', type: 'submit' }, t('holdings.save'))),
-  t('holdings.footer'));
+  return h('form', { class: 'stack', onSubmit: submit, onInput: saveDraft },
+    section(null, h('div', { class: 'card' },
+      list,
+      note,
+      h('button', { class: 'row row-button action', type: 'button', onClick: addRow }, t('holdings.add')),
+      h('label', { class: 'row row-button action' }, t('image.import'), h('input', {
+        class: 'file-input',
+        type: 'file',
+        accept: 'image/*',
+        multiple: true,
+        'aria-label': t('image.import'),
+        onChange: importImages,
+      }))),
+    t('holdings.footer')),
+    h('button', { class: 'capsule wide', type: 'submit' }, t('holdings.save')));
 }
 
 function passwordForm() {

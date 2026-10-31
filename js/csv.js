@@ -68,9 +68,9 @@ export function readHoldings(entries, saved = {}) {
   const filled = entries.filter((entry) => (
     entry.ticker || entry.shares || entry.total || entry.unrealized
   ));
-  if (filled.length === 0) return { rows: [], errors: [t('holdings.none')] };
+  if (filled.length === 0) return { rows: [], errors: [t('holdings.none')], problems: [] };
 
-  const errors = [];
+  const problems = [];
   const seen = new Set();
   const rows = filled.map((entry) => {
     const ticker = entry.ticker.toUpperCase();
@@ -79,15 +79,17 @@ export function readHoldings(entries, saved = {}) {
     const total = entry.total === '' ? held?.total : Number(entry.total);
     const unrealized = Number(entry.unrealized);
     const hasResult = entry.unrealized !== '';
+    const index = entries.indexOf(entry);
+    const report = (key, values) => problems.push({ index, message: t(key, values) });
 
-    if (!TICKER_PATTERN.test(ticker)) errors.push(t('holdings.badTicker'));
-    else if (seen.has(ticker)) errors.push(t('holdings.twice', { ticker }));
+    if (!TICKER_PATTERN.test(ticker)) report('holdings.badTicker', { row: index + 1 });
+    else if (seen.has(ticker)) report('holdings.twice', { ticker });
     else if (held && !entry.shares && !entry.total && !hasResult) {
-      errors.push(t('holdings.nothing', { ticker }));
-    } else if (!(shares > 0)) errors.push(t('holdings.noShares', { ticker }));
-    else if (!(total >= 0)) errors.push(t('holdings.noTotal', { ticker }));
+      report('holdings.nothing', { ticker });
+    } else if (!(shares > 0)) report('holdings.noShares', { ticker });
+    else if (!(total >= 0)) report('holdings.noTotal', { ticker });
     else if (hasResult && !(total + unrealized >= 0)) {
-      errors.push(t('holdings.lossTooLarge', { ticker }));
+      report('holdings.lossTooLarge', { ticker });
     }
     seen.add(ticker);
 
@@ -97,7 +99,7 @@ export function readHoldings(entries, saved = {}) {
       : row;
   });
 
-  return { rows, errors };
+  return { rows, errors: problems.map((problem) => problem.message), problems };
 }
 
 const PORTFOLIO_STOCK = /([A-Z][A-Z0-9.-]{0,9})\s+([\d,]+\.\d{2})\s+(?:\S+\s+){0,2}?([-+]?[\d,]+\.\d{2})\s*%/;

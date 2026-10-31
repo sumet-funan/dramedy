@@ -1196,6 +1196,7 @@ label.row:focus-within {
 .holding-ticker {
   flex: 1;
   min-width: 0;
+  min-height: 44px;
   padding: 4px 0;
   border: 0;
   background: none;
@@ -1212,9 +1213,9 @@ label.row:focus-within {
   display: grid;
   flex: none;
   place-items: center;
-  width: 40px;
-  height: 40px;
-  margin-right: -10px;
+  width: 44px;
+  height: 44px;
+  margin-right: -12px;
   border: 0;
   border-radius: 50%;
   background: none;
@@ -1248,13 +1249,32 @@ label.row:focus-within {
 .holding-field input {
   width: 100%;
   min-width: 0;
-  min-height: 40px;
+  min-height: 44px;
   padding: 6px 10px;
   border: 0;
   border-radius: 10px;
   background: var(--fill);
+  color: var(--ink);
   font-size: 16px;
   font-variant-numeric: tabular-nums;
+}
+
+.holding-field input::placeholder {
+  color: var(--ink-3);
+}
+
+.holding-hint {
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.holding.bad {
+  box-shadow: inset 0 0 0 2px var(--loss-ink);
+}
+
+.holding.bad .holding-hint {
+  color: var(--loss-ink);
 }
 
 .holding-ticker:focus,
