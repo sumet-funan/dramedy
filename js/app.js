@@ -4,6 +4,7 @@ import {
   isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, readPortfolio, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
+import { DUPLICATE_ROW, fillsShares, findDuplicates } from './duplicates.js';
 import {
   LANGUAGES, applyLanguage, currentLanguage, plural, setLanguage, t,
 } from './i18n.js';
@@ -140,6 +141,7 @@ function describeError(error) {
   if (error?.code === 'invalid_credentials') {
     return t('error.credentials');
   }
+  if (error?.code === DUPLICATE_ROW) return t('error.duplicate');
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return t('error.network');
   }
@@ -585,6 +587,31 @@ function renderTrades() {
     results);
 }
 
+const SIMILAR_SHOWN = 5;
+
+// Two rows can honestly match, such as equal fees on one day, so the viewer decides.
+function confirmSimilar(rows) {
+  const similar = findDuplicates(rows, state.transactions)
+    .filter((found) => found?.kind === 'similar');
+  if (similar.length === 0) return true;
+
+  const lines = similar.slice(0, SIMILAR_SHOWN).map(({ match }) => [
+    typeLabel(match.type),
+    match.ticker,
+    money(toCents(match.amount_usd)),
+    formats.date.format(new Date(match.occurred_at)),
+  ].filter(Boolean).join(' · '));
+  const more = similar.length > SIMILAR_SHOWN
+    ? [t('error.more', { count: similar.length - SIMILAR_SHOWN }).trim()]
+    : [];
+  return confirm(`${plural('data.confirmSimilar', similar.length)}\n\n${[...lines, ...more].join('\n')}`);
+}
+
+const importedText = ({ added, filled }, total) => [
+  t('data.imported', { added, skipped: total - added }),
+  filled > 0 && t('data.filled', { count: filled }),
+].filter(Boolean).join(' ');
+
 function submitTrade(event) {
   event.preventDefault();
   const form = new FormData(event.target);
@@ -605,7 +632,18 @@ function submitTrade(event) {
     render();
     return;
   }
-  run(() => state.store.add(row), t('trade.added'));
+
+  const [found] = findDuplicates([row], state.transactions);
+  if (fillsShares(row, found)) {
+    run(() => state.store.importRows([row]), (saved) => importedText(saved, 1));
+    return;
+  }
+  if (found?.kind === 'same') {
+    setNotice('bad', t('error.duplicate'));
+    render();
+    return;
+  }
+  if (confirmSimilar([row])) run(() => state.store.add(row), t('trade.added'));
 }
 
 function formRow(label, control) {
@@ -679,6 +717,7 @@ function tradeImport() {
 
 function reviewRow(entry, onRemove) {
   const hint = h('p', { class: 'holding-hint', hidden: true });
+  const match = h('p', { class: 'holding-match', hidden: true });
 
   const refresh = () => {
     const type = fieldOf(row, 'type').value;
@@ -717,6 +756,7 @@ function reviewRow(entry, onRemove) {
       onClick: () => onRemove(row),
     }, icon('close'))),
   hint,
+  match,
   h('div', { class: 'holding-fields review' },
     holdingField('date', t('form.date'), {
       type: 'datetime-local', step: '1', required: true, value: entry.date ?? '',
@@ -748,6 +788,26 @@ const reviewEntry = (row) => ({
   warning: row.classList.contains('bad') ? row.querySelector('.holding-hint').textContent : '',
 });
 
+function reviewedRow(entry) {
+  const amount = Math.abs(Number(entry.amount));
+  return normalizeRow({
+    type: entry.type,
+    occurred_at: `${entry.date}+07:00`,
+    ticker: entry.ticker,
+    amount_usd: isPositiveType(entry.type) ? amount : -amount,
+    shares: entry.shares,
+    note: '',
+  });
+}
+
+function matchText(row, found) {
+  if (found?.kind === 'similar') {
+    return t('tradeImage.similar', { time: formats.date.format(new Date(found.match.occurred_at)) });
+  }
+  const fills = fillsShares(row, found);
+  return found ? t(fills ? 'tradeImage.fill' : 'tradeImage.same') : '';
+}
+
 function tradeReview() {
   const finish = () => {
     state.tradeDraft = [];
@@ -759,6 +819,30 @@ function tradeReview() {
   };
 
   const note = h('p', { class: 'row-warning holding-note', role: 'status' }, state.tradeNote);
+  const matches = h('p', { class: 'row-warning holding-note', role: 'status', hidden: true });
+
+  // Pairing runs across the list, so one row's edit can change another's match.
+  const showMatches = () => {
+    const items = [...list.children].map((item) => ({ item, ...reviewedRow(reviewEntry(item)) }));
+    const ready = items.filter(({ row }) => row);
+    const found = findDuplicates(ready.map(({ row }) => row), state.transactions);
+    const text = new Map(ready.map(({ item, row }, index) => [item, matchText(row, found[index])]));
+    const kind = new Map(ready.map(({ item }, index) => [item, found[index]?.kind]));
+
+    for (const { item } of items) {
+      const line = item.querySelector('.holding-match');
+      line.textContent = text.get(item) ?? '';
+      line.hidden = !line.textContent;
+      item.classList.toggle('similar', kind.get(item) === 'similar');
+    }
+
+    const count = (wanted) => found.filter((match) => match?.kind === wanted).length;
+    matches.textContent = [
+      count('same') > 0 && t('tradeImage.sameCount', { count: count('same') }),
+      count('similar') > 0 && t('tradeImage.similarCount', { count: count('similar') }),
+    ].filter(Boolean).join(' ');
+    matches.hidden = !matches.textContent;
+  };
 
   const removeRow = (row) => {
     row.remove();
@@ -766,10 +850,17 @@ function tradeReview() {
     if (state.tradeDraft.length === 0) {
       finish();
       render();
+    } else {
+      showMatches();
     }
   };
 
   const list = h('ul', {}, state.tradeDraft.map((entry) => reviewRow(entry, removeRow)));
+
+  const update = () => {
+    saveDraft();
+    showMatches();
+  };
 
   const cancel = () => {
     if (confirm(t('tradeImage.confirmCancel'))) {
@@ -781,17 +872,7 @@ function tradeReview() {
   const submit = (event) => {
     event.preventDefault();
     const items = [...list.children];
-    const results = items.map(reviewEntry).map((entry) => {
-      const amount = Math.abs(Number(entry.amount));
-      return normalizeRow({
-        type: entry.type,
-        occurred_at: `${entry.date}+07:00`,
-        ticker: entry.ticker,
-        amount_usd: isPositiveType(entry.type) ? amount : -amount,
-        shares: entry.shares,
-        note: '',
-      });
-    });
+    const results = items.map(reviewEntry).map(reviewedRow);
 
     const problems = results
       .map(({ error }, index) => ({ error, index }))
@@ -808,14 +889,18 @@ function tradeReview() {
     }
 
     const rows = results.map(({ row }) => row);
-    run(() => state.store.importRows(rows), (added) => {
+    if (!confirmSimilar(rows)) return;
+
+    run(() => state.store.importRows(rows), (saved) => {
       finish();
-      return t('data.imported', { added, skipped: rows.length - added });
+      return importedText(saved, rows.length);
     });
   };
 
-  return h('form', { class: 'stack', onSubmit: submit, onInput: saveDraft, onChange: saveDraft },
-    section(null, h('div', { class: 'card' }, note, list), t('tradeImage.footer')),
+  showMatches();
+
+  return h('form', { class: 'stack', onSubmit: submit, onInput: update, onChange: update },
+    section(null, h('div', { class: 'card' }, note, matches, list), t('tradeImage.footer')),
     h('button', { class: 'capsule wide', type: 'submit' }, t('tradeImage.save')),
     h('button', { class: 'text-button', type: 'button', onClick: cancel }, t('tradeImage.cancel')));
 }
@@ -889,6 +974,7 @@ function downloadExport() {
 async function importFile(event) {
   const [file] = event.target.files;
   if (!file) return;
+  event.target.value = '';
 
   const { rows, errors } = parseCsv(await file.text());
   if (errors.length > 0) {
@@ -898,9 +984,11 @@ async function importFile(event) {
     return;
   }
 
+  if (!confirmSimilar(rows)) return;
+
   await run(
     () => state.store.importRows(rows),
-    (added) => t('data.imported', { added, skipped: rows.length - added }),
+    (saved) => importedText(saved, rows.length),
   );
 }
 

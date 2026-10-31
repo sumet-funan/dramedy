@@ -44,6 +44,13 @@ trades from its history screen. The text is read in the browser by Tesseract in
 `vendor/tesseract`, so images are never uploaded, and nothing is saved until the
 rows are checked and submitted.
 
+## Duplicates
+
+The database refuses a trade with the same time, type, ticker and amount as one
+already saved. A skipped row still fills in a share count the saved trade lacks.
+A row that matches on everything but the time, on the same Bangkok day, may be the
+same trade with a misread or missing time, so it's marked and needs confirming.
+
 ## Market prices
 
 The sync button on Stocks calls the `market-prices` Edge Function in

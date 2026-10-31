@@ -1269,6 +1269,20 @@ label.row:focus-within {
   color: var(--ink-3);
 }
 
+.holding-match {
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.holding.similar {
+  box-shadow: inset 0 0 0 2px var(--warn-ink);
+}
+
+.holding.similar .holding-match {
+  color: var(--warn-ink);
+}
+
 .holding.bad {
   box-shadow: inset 0 0 0 2px var(--loss-ink);
 }

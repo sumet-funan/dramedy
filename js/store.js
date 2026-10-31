@@ -1,6 +1,8 @@
 // Data access. The Supabase and demo stores share one interface so the
 // interface code never needs to know which it is talking to.
 
+import { DUPLICATE_ROW, findDuplicates, sharesToFill } from './duplicates.js';
+
 const PAGE_SIZE = 1000;
 const IMPORT_CHUNK = 200;
 const CONFLICT_COLUMNS = 'user_id,occurred_at,type,ticker,amount_usd';
@@ -28,6 +30,17 @@ export function createSupabaseStore(client, userId) {
       all.push(...data);
       if (data.length < PAGE_SIZE) return all;
     }
+  }
+
+  async function fillShares(rows) {
+    const fills = sharesToFill(rows, await loadTransactions());
+    const results = await Promise.all(fills.map(({ id, shares }) => client
+      .from('transactions')
+      .update({ shares })
+      .eq('id', id)));
+    const failed = results.find((result) => result.error);
+    if (failed) throw failed.error;
+    return fills.length;
   }
 
   return {
@@ -101,8 +114,9 @@ export function createSupabaseStore(client, userId) {
         .map((row) => ({ ticker: row.ticker, price: row.current_price_usd })));
     },
 
-    // Duplicates are skipped by the database, so re-importing a file is safe.
-    // Returns how many rows were actually new.
+    // Duplicates are skipped by the database, so re-importing a file is safe. A
+    // skipped row can still supply the share count its saved trade lacks. Returns
+    // how many rows were actually new and how many saved trades gained a count.
     async importRows(rows) {
       let added = 0;
       for (let i = 0; i < rows.length; i += IMPORT_CHUNK) {
@@ -114,7 +128,8 @@ export function createSupabaseStore(client, userId) {
         if (error) throw error;
         added += data.length;
       }
-      return added;
+      const filled = added < rows.length ? await fillShares(rows) : 0;
+      return { added, filled };
     },
   };
 }
@@ -163,6 +178,7 @@ export function createDemoStore({ transactions, statuses, holdings }) {
       });
     },
     async add(row) {
+      if (findDuplicates([row], rows)[0]?.kind === 'same') throw { code: DUPLICATE_ROW };
       rows.push({ ...row, id: String(nextId++) });
     },
     async remove(id) {
@@ -173,8 +189,15 @@ export function createDemoStore({ transactions, statuses, holdings }) {
       if (status === 'sold') delete held[ticker];
     },
     async importRows(imported) {
-      imported.forEach((row) => rows.push({ ...row, id: String(nextId++) }));
-      return imported.length;
+      const found = findDuplicates(imported, rows);
+      const fills = sharesToFill(imported, rows);
+      const fresh = imported.filter((row, index) => found[index]?.kind !== 'same');
+      fresh.forEach((row) => rows.push({ ...row, id: String(nextId++) }));
+      rows = rows.map((row) => {
+        const fill = fills.find(({ id }) => id === row.id);
+        return fill ? { ...row, shares: fill.shares } : row;
+      });
+      return { added: fresh.length, filled: fills.length };
     },
   };
 }
