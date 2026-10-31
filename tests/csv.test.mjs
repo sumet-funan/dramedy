@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { normalizeRow, parseCsv, toCsv } from '../js/csv.js';
+import { normalizeRow, parseCsv, parseHoldings, toCsv } from '../js/csv.js';
 
 const HEADER = 'occurred_at,type,ticker,amount_usd,shares,note';
 
@@ -51,6 +51,44 @@ test('strips a byte order mark and handles Windows line endings', () => {
   const { rows, errors } = parseCsv(`﻿${HEADER}\r\n2026-01-01T00:00:00Z,deposit,,5,,\r\n`);
   assert.deepEqual(errors, []);
   assert.equal(rows.length, 1);
+});
+
+const holding = (ticker, shares, average, total) => [
+  `หุ้น: ${ticker}`,
+  `จำนวนหุ้นคงเหลือ: ${shares}`,
+  `ต้นทุนต่อหุ้น(USD): ${average}`,
+  `ต้นทุนรวม(USD): ${total}`,
+].join('\n');
+
+test('reads the Thai holdings list', () => {
+  const text = `${holding('aaa', 10, 2.5, 25)}\r\n\r\n${holding('BBB', 0.5, 40, '20.00')}\n`;
+  assert.deepEqual(parseHoldings(text), {
+    rows: [
+      { ticker: 'AAA', shares: 10, total_cost_usd: 25 },
+      { ticker: 'BBB', shares: 0.5, total_cost_usd: 20 },
+    ],
+    errors: [],
+  });
+});
+
+test('handles thousands separators and rounded averages', () => {
+  const { rows, errors } = parseHoldings(holding('AAA', '1,000', 1.2345, '1,234.50'));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(rows, [{ ticker: 'AAA', shares: 1000, total_cost_usd: 1234.5 }]);
+});
+
+test('flags holdings that do not add up', () => {
+  const { errors } = parseHoldings(holding('AAA', 10, 2.5, 99));
+  assert.deepEqual(errors, ['AAA: shares × cost per share doesn’t match the total cost']);
+});
+
+test('flags missing lines, duplicates and unrelated text', () => {
+  assert.deepEqual(parseHoldings('hello').errors, ['No holdings found in the pasted text']);
+  assert.deepEqual(parseHoldings('หุ้น: AAA').errors, ['AAA has no share count']);
+  assert.deepEqual(
+    parseHoldings(`${holding('AAA', 1, 1, 1)}\n${holding('AAA', 1, 1, 1)}`).errors,
+    ['AAA is listed twice'],
+  );
 });
 
 test('an export can be imported again without changes', () => {

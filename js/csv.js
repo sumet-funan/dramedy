@@ -53,6 +53,51 @@ export function normalizeRow(input) {
   };
 }
 
+const HOLDING_PATTERNS = {
+  ticker: /^\s*หุ้น\s*:\s*([A-Za-z0-9.-]+)\s*$/,
+  shares: /^\s*จำนวนหุ้นคงเหลือ\s*:\s*([\d,.]+)\s*$/,
+  average: /^\s*ต้นทุนต่อหุ้น\s*\(USD\)\s*:\s*([\d,.]+)\s*$/,
+  total: /^\s*ต้นทุนรวม\s*\(USD\)\s*:\s*([\d,.]+)\s*$/,
+};
+
+// The largest gap between shares × average and the total that rounding can explain.
+const HOLDING_TOLERANCE_USD = 0.05;
+
+const readNumber = (text) => Number(text.replaceAll(',', ''));
+
+// Reads the Thai holdings list, one block of four lines per stock.
+export function parseHoldings(text) {
+  const blocks = [];
+  for (const line of text.split(/\r?\n/)) {
+    for (const [field, pattern] of Object.entries(HOLDING_PATTERNS)) {
+      const match = line.match(pattern);
+      if (!match) continue;
+      if (field === 'ticker') blocks.push({ ticker: match[1].toUpperCase() });
+      else if (blocks.length > 0) blocks.at(-1)[field] = readNumber(match[1]);
+    }
+  }
+
+  if (blocks.length === 0) return { rows: [], errors: ['No holdings found in the pasted text'] };
+
+  const errors = [];
+  const seen = new Set();
+  for (const { ticker, shares, average, total } of blocks) {
+    if (seen.has(ticker)) errors.push(`${ticker} is listed twice`);
+    seen.add(ticker);
+
+    if (!(shares > 0)) errors.push(`${ticker} has no share count`);
+    else if (!(total >= 0)) errors.push(`${ticker} has no total cost`);
+    else if (average > 0 && Math.abs(shares * average - total) > HOLDING_TOLERANCE_USD) {
+      errors.push(`${ticker}: shares × cost per share doesn’t match the total cost`);
+    }
+  }
+
+  return {
+    rows: blocks.map(({ ticker, shares, total }) => ({ ticker, shares, total_cost_usd: total })),
+    errors,
+  };
+}
+
 function parseLine(line) {
   const cells = [];
   let cell = '';

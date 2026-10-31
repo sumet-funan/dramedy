@@ -1123,3 +1123,31 @@ label.row:focus-within {
     background: CanvasText;
   }
 }
+
+/* Holdings */
+.row-subtitle.strong {
+  color: var(--ink-2);
+}
+
+.row-amount.small {
+  margin-top: 4px;
+  font-size: 15px;
+}
+
+.paste-box {
+  display: block;
+  width: 100%;
+  min-height: 132px;
+  padding: 12px 16px;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 16px;
+  resize: vertical;
+}
+
+.card:has(.paste-box:focus) {
+  outline: 2px solid var(--tint);
+  outline-offset: -2px;
+}

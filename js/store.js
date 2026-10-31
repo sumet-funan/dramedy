@@ -23,11 +23,16 @@ export function createSupabaseStore(client, userId) {
   return {
     async load() {
       const transactions = await loadTransactions();
-      const { data, error } = await client.from('stock_status').select('ticker, status');
-      if (error) throw error;
+      const [statusResult, holdingResult] = await Promise.all([
+        client.from('stock_status').select('ticker, status'),
+        client.from('holdings').select('ticker, shares, total_cost_usd, updated_at'),
+      ]);
+      if (statusResult.error) throw statusResult.error;
+      if (holdingResult.error) throw holdingResult.error;
       return {
         transactions,
-        statuses: Object.fromEntries(data.map((row) => [row.ticker, row.status])),
+        statuses: Object.fromEntries(statusResult.data.map((row) => [row.ticker, row.status])),
+        holdings: Object.fromEntries(holdingResult.data.map((row) => [row.ticker, row])),
       };
     },
 
@@ -49,6 +54,31 @@ export function createSupabaseStore(client, userId) {
         updated_at: new Date().toISOString(),
       });
       if (error) throw error;
+
+      if (status === 'sold') {
+        const removal = await client.from('holdings').delete().eq('ticker', ticker);
+        if (removal.error) throw removal.error;
+      }
+    },
+
+    // Replaces the whole list: anything traded but not listed is now fully sold.
+    async replaceHoldings(rows, soldTickers) {
+      const now = new Date().toISOString();
+      const saved = await client.from('holdings').upsert(
+        rows.map((row) => ({ ...row, user_id: userId, updated_at: now })),
+      );
+      if (saved.error) throw saved.error;
+
+      const listed = rows.map((row) => `"${row.ticker}"`).join(',');
+      const removal = await client.from('holdings').delete().not('ticker', 'in', `(${listed})`);
+      if (removal.error) throw removal.error;
+
+      const statuses = [
+        ...rows.map((row) => ({ ticker: row.ticker, status: 'holding' })),
+        ...soldTickers.map((ticker) => ({ ticker, status: 'sold' })),
+      ].map((row) => ({ ...row, user_id: userId, updated_at: now }));
+      const marked = await client.from('stock_status').upsert(statuses);
+      if (marked.error) throw marked.error;
     },
 
     // Duplicates are skipped by the database, so re-importing a file is safe.
@@ -70,9 +100,10 @@ export function createSupabaseStore(client, userId) {
 }
 
 // Keeps everything in memory, so nothing a demo visitor does is ever saved.
-export function createDemoStore({ transactions, statuses }) {
+export function createDemoStore({ transactions, statuses, holdings }) {
   let rows = [...transactions];
   const chosen = { ...statuses };
+  let held = { ...holdings };
   let nextId = rows.length + 1;
 
   return {
@@ -80,7 +111,14 @@ export function createDemoStore({ transactions, statuses }) {
       return {
         transactions: [...rows].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at)),
         statuses: { ...chosen },
+        holdings: { ...held },
       };
+    },
+    async replaceHoldings(listed, soldTickers) {
+      const updated_at = new Date().toISOString();
+      held = Object.fromEntries(listed.map((row) => [row.ticker, { ...row, updated_at }]));
+      listed.forEach((row) => { chosen[row.ticker] = 'holding'; });
+      soldTickers.forEach((ticker) => { chosen[ticker] = 'sold'; });
     },
     async add(row) {
       rows.push({ ...row, id: String(nextId++) });
@@ -90,6 +128,7 @@ export function createDemoStore({ transactions, statuses }) {
     },
     async setStatus(ticker, status) {
       chosen[ticker] = status;
+      if (status === 'sold') delete held[ticker];
     },
     async importRows(imported) {
       imported.forEach((row) => rows.push({ ...row, id: String(nextId++) }));

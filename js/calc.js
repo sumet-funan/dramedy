@@ -72,16 +72,42 @@ function cashFlowResult(trades, bought, sold, chosenStatus) {
   };
 }
 
-function summarizeStock(ticker, trades, chosenStatus) {
+// The broker's own figures for what is still held make profit exact: whatever
+// isn't in the remaining cost has been realized. Commission paid on shares still
+// held is part of that, because the broker's cost leaves it out. It is dated to
+// the latest sale, or the latest trade if nothing has been sold.
+function holdingResult(trades, bought, sold, holding) {
+  const costLeft = toCents(holding.total_cost_usd);
+  const lastTrade = trades.at(-1);
+  const lastSale = trades.filter((t) => t.type === 'sell').at(-1) ?? lastTrade;
+
+  return {
+    exact: true,
+    fromHolding: true,
+    oversold: false,
+    status: 'holding',
+    sharesHeld: Number(holding.shares),
+    costLeft,
+    updatedAt: holding.updated_at,
+    outdated: Boolean(lastTrade)
+      && Date.parse(lastTrade.occurred_at) > Date.parse(holding.updated_at),
+    sales: lastSale
+      ? [{ month: monthOf(lastSale.occurred_at), cents: sold + costLeft - bought }]
+      : [],
+  };
+}
+
+function summarizeStock(ticker, trades, chosenStatus, holding) {
   const buys = trades.filter((t) => t.type === 'buy');
   const sells = trades.filter((t) => t.type === 'sell');
   const bought = buys.reduce((sum, t) => sum - toCents(t.amount_usd), 0);
   const sold = sells.reduce((sum, t) => sum + toCents(t.amount_usd), 0);
   const hasAllShares = trades.every((t) => Number(t.shares) > 0);
 
-  const result = hasAllShares
-    ? averageCostResult(trades)
-    : cashFlowResult(trades, bought, sold, chosenStatus);
+  let result;
+  if (holding) result = holdingResult(trades, bought, sold, holding);
+  else if (hasAllShares) result = averageCostResult(trades);
+  else result = cashFlowResult(trades, bought, sold, chosenStatus);
 
   const hasRealized = result.sales.length > 0;
   return {
@@ -90,7 +116,7 @@ function summarizeStock(ticker, trades, chosenStatus) {
     sold,
     net: sold - bought,
     tradeCount: trades.length,
-    lastAt: trades.at(-1).occurred_at,
+    lastAt: trades.at(-1)?.occurred_at ?? null,
     realized: hasRealized
       ? Math.round(result.sales.reduce((sum, s) => sum + s.cents, 0))
       : null,
@@ -98,7 +124,7 @@ function summarizeStock(ticker, trades, chosenStatus) {
   };
 }
 
-export function summarize(transactions, statuses = {}) {
+export function summarize(transactions, statuses = {}, holdings = {}) {
   const totals = { cash: 0, moneyAdded: 0, dividends: 0, tax: 0, fees: 0, refunds: 0 };
   const tradesByTicker = new Map();
 
@@ -122,8 +148,12 @@ export function summarize(transactions, statuses = {}) {
     }
   }
 
+  for (const ticker of Object.keys(holdings)) {
+    if (!tradesByTicker.has(ticker)) tradesByTicker.set(ticker, []);
+  }
+
   const stocks = [...tradesByTicker]
-    .map(([ticker, trades]) => summarizeStock(ticker, trades, statuses[ticker]))
+    .map(([ticker, trades]) => summarizeStock(ticker, trades, statuses[ticker], holdings[ticker]))
     .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
   const monthlyMap = new Map();

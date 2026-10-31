@@ -1,6 +1,8 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import { monthOf, summarize } from './calc.js';
-import { isPositiveType, needsTicker, normalizeRow, parseCsv, toCsv } from './csv.js';
+import {
+  isPositiveType, needsTicker, normalizeRow, parseCsv, parseHoldings, toCsv,
+} from './csv.js';
 import { demoData } from './demo.js';
 import { icon } from './icons.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
@@ -131,10 +133,10 @@ function describeError(error) {
 }
 
 async function refresh() {
-  const { transactions, statuses } = await state.store.load();
+  const { transactions, statuses, holdings } = await state.store.load();
   state.transactions = transactions;
   state.statuses = statuses;
-  state.summary = summarize(transactions, statuses);
+  state.summary = summarize(transactions, statuses, holdings);
 }
 
 async function run(action, success) {
@@ -246,7 +248,7 @@ function renderOverview() {
     h('section', { class: 'hero' },
       h('div', { class: 'hero-label' }, icon('overview'), 'Total profit'),
       h('div', { class: 'hero-value' }, signedMoney(s.totalProfit)),
-      h('div', { class: 'hero-hint' }, 'Sold stocks, plus dividends, minus fees')),
+      h('div', { class: 'hero-hint' }, 'Realized profit, plus dividends, minus fees')),
 
     s.needsReview > 0 && h('button', {
       class: 'card row row-button review',
@@ -260,11 +262,11 @@ function renderOverview() {
     h('span', { class: 'row-main' },
       h('span', { class: 'row-title' },
         `${s.needsReview} ${s.needsReview === 1 ? 'stock needs' : 'stocks need'} a status`),
-      h('span', { class: 'row-subtitle' }, 'Only fully sold stocks count as profit')),
+      h('span', { class: 'row-subtitle' }, 'Its profit isn’t counted until then')),
     icon('chevron')),
 
     h('section', { class: 'tiles' },
-      tile('Sold stocks', signedMoney(s.realized)),
+      tile('Realized', signedMoney(s.realized), 'Profit taken so far'),
       tile('Still invested', money(s.stillInvested), 'Not yet returned'),
       tile('Cash balance', money(s.cash), 'From your rows'),
       tile('Money added', money(s.moneyAdded), 'Deposits and exchanges'),
@@ -277,7 +279,7 @@ function renderOverview() {
         ? monthlyChart(s.monthly)
         : h('div', { class: 'card card-note' }, 'Mark a stock as fully sold to see it here.'),
       s.monthly.length > 0
-        && 'Without share counts, a stock’s whole profit appears in the month of its final sale.',
+        && 'Each stock’s whole realized profit appears in the month of its latest sale.',
     ));
 }
 
@@ -297,25 +299,50 @@ function statusPicker(stock) {
   h('option', { value: 'sold', selected: stock.status === 'sold' }, 'Fully sold'));
 }
 
-function stockRow(stock) {
+function heldFacts(stock) {
+  const shares = stock.sharesHeld.toLocaleString('en-US');
+  return `${shares} shares · ${money(Math.round(stock.costLeft / stock.sharesHeld))} avg cost`;
+}
+
+function stockAmounts(stock) {
+  if (stock.fromHolding) {
+    return [
+      h('span', { class: 'row-amount' }, money(stock.costLeft)),
+      h('span', { class: 'row-subtitle' }, 'Invested'),
+      stock.realized !== null && h('span', { class: `row-amount small ${toneOf(stock.realized)}` },
+        signedMoney(stock.realized)),
+      stock.realized !== null && h('span', { class: 'row-subtitle' }, 'Realized'),
+    ];
+  }
+
   const hasProfit = stock.realized !== null;
-  const facts = [`Bought ${money(stock.bought)}`, `Sold ${money(stock.sold)}`];
-  if (stock.exact) facts.push(`${stock.sharesHeld.toLocaleString('en-US')} shares held`);
+  return [
+    h('span', { class: `row-amount ${hasProfit ? toneOf(stock.realized) : ''}` },
+      hasProfit ? signedMoney(stock.realized) : money(stock.costLeft)),
+    h('span', { class: 'row-subtitle' }, hasProfit ? 'Profit' : 'Invested'),
+  ];
+}
+
+function stockRow(stock) {
+  const trades = `Bought ${money(stock.bought)} · Sold ${money(stock.sold)}`;
+  const usesTradeShares = stock.exact && !stock.fromHolding;
 
   return h('li', { class: 'row stock-row' },
     monogram(stock.ticker),
     h('div', { class: 'row-main' },
       h('span', { class: 'row-title' }, stock.ticker),
-      h('span', { class: 'row-subtitle' }, facts.join(' · ')),
+      stock.fromHolding && h('span', { class: 'row-subtitle strong' }, heldFacts(stock)),
+      h('span', { class: 'row-subtitle' }, trades),
+      usesTradeShares && h('span', { class: 'row-subtitle' },
+        `${stock.sharesHeld.toLocaleString('en-US')} shares held`),
       stock.oversold && h('span', { class: 'row-warning' },
         icon('alert'), 'More shares sold than bought. A buy may be missing.'),
-      stock.exact
+      stock.outdated && h('span', { class: 'row-warning' },
+        icon('alert'), 'Traded since this holding was updated'),
+      usesTradeShares
         ? h('span', { class: 'row-subtitle' }, 'Status comes from your share counts')
         : statusPicker(stock)),
-    h('div', { class: 'row-end' },
-      h('span', { class: `row-amount ${hasProfit ? toneOf(stock.realized) : ''}` },
-        hasProfit ? signedMoney(stock.realized) : money(stock.costLeft)),
-      h('span', { class: 'row-subtitle' }, hasProfit ? 'Profit' : 'Invested')));
+    h('div', { class: 'row-end' }, stockAmounts(stock)));
 }
 
 function renderStocks() {
@@ -537,6 +564,45 @@ async function importFile(event) {
   );
 }
 
+function holdingsForm() {
+  const box = h('textarea', {
+    class: 'paste-box',
+    name: 'holdings',
+    rows: 6,
+    'aria-label': 'Holdings list',
+    placeholder: 'หุ้น: AAPL\nจำนวนหุ้นคงเหลือ: 10\nต้นทุนต่อหุ้น(USD): 150\nต้นทุนรวม(USD): 1500',
+  });
+
+  const submit = (event) => {
+    event.preventDefault();
+    const { rows, errors } = parseHoldings(box.value);
+    if (errors.length > 0) {
+      setNotice('bad', `Nothing was saved. ${errors.slice(0, 3).join('. ')}.`);
+      render();
+      return;
+    }
+
+    const listed = new Set(rows.map((row) => row.ticker));
+    const sold = state.summary.stocks
+      .filter((stock) => stock.tradeCount > 0 && !listed.has(stock.ticker))
+      .map((stock) => stock.ticker);
+    const question = `Save ${rows.length} holdings and mark ${sold.length} other stocks as fully sold?`;
+    if (confirm(question)) {
+      run(() => state.store.replaceHoldings(rows, sold), `${rows.length} holdings saved`);
+    }
+  };
+
+  const dates = state.summary.stocks.map((stock) => stock.updatedAt).filter(Boolean).sort();
+  const updated = dates.length > 0
+    ? `Last updated ${dateFormat.format(new Date(dates.at(-1)))}. `
+    : '';
+
+  return section('Holdings', h('form', { class: 'card', onSubmit: submit },
+    box,
+    h('button', { class: 'row row-button action', type: 'submit' }, 'Save Holdings')),
+  `${updated}Paste your full list. Stocks you’ve traded that aren’t listed are marked as fully sold.`);
+}
+
 function passwordForm() {
   const submit = async (event) => {
     event.preventDefault();
@@ -561,6 +627,7 @@ function passwordForm() {
 
 function renderMore() {
   return h('div', { class: 'stack' },
+    holdingsForm(),
     section('Your data', h('div', { class: 'card' },
       h('label', { class: 'row row-button' },
         h('span', { class: 'row-icon' }, icon('import')),

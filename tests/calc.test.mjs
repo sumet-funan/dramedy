@@ -132,6 +132,67 @@ test('total profit includes dividends, tax, fees and refunds', () => {
   assert.equal(result.totalProfit, 1000 + 100 - 15 - 6 + 1);
 });
 
+const held = (shares, total_cost_usd, updated_at = '2026-12-01T00:00:00Z') => ({
+  shares, total_cost_usd, updated_at,
+});
+
+test('a holding makes profit exact while shares are still held', () => {
+  const rows = [
+    tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -300),
+    tx('2026-02-01T10:00:00Z', 'sell', 'AAA', 200),
+  ];
+  const result = summarize(rows, {}, { AAA: held(10, 150) });
+  const [stock] = result.stocks;
+  assert.equal(stock.status, 'holding');
+  assert.equal(stock.sharesHeld, 10);
+  assert.equal(stock.costLeft, 15000);
+  assert.equal(stock.realized, 5000);
+  assert.deepEqual(result.monthly, [{ month: '2026-02', cents: 5000 }]);
+  assert.equal(result.needsReview, 0);
+});
+
+test('commission on shares still held counts against profit', () => {
+  const rows = [tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -100.15)];
+  const [stock] = summarize(rows, {}, { AAA: held(1, 100) }).stocks;
+  assert.equal(stock.realized, -15);
+  assert.equal(stock.costLeft, 10000);
+});
+
+test('a holding beats a manual status', () => {
+  const rows = [tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -100)];
+  const [stock] = summarize(rows, { AAA: 'sold' }, { AAA: held(1, 100) }).stocks;
+  assert.equal(stock.status, 'holding');
+});
+
+test('a holding with no trades adds to invested but not to profit', () => {
+  const result = summarize([], {}, { AAA: held(1, 100) });
+  assert.equal(result.stocks[0].realized, null);
+  assert.equal(result.stillInvested, 10000);
+  assert.equal(result.totalProfit, 0);
+});
+
+test('a trade after the holding date marks it as outdated', () => {
+  const rows = [tx('2026-06-02T10:00:00Z', 'buy', 'AAA', -100)];
+  const before = summarize(rows, {}, { AAA: held(1, 100, '2026-06-01T00:00:00Z') });
+  const after = summarize(rows, {}, { AAA: held(1, 100, '2026-06-03T00:00:00Z') });
+  assert.equal(before.stocks[0].outdated, true);
+  assert.equal(after.stocks[0].outdated, false);
+});
+
+test('profit ties to cash: cash + invested - money added', () => {
+  const rows = [
+    tx('2026-01-01T10:00:00Z', 'deposit', '', 1000),
+    tx('2026-01-02T10:00:00Z', 'buy', 'AAA', -300.3),
+    tx('2026-01-03T10:00:00Z', 'sell', 'AAA', 100),
+    tx('2026-01-04T10:00:00Z', 'buy', 'BBB', -200),
+    tx('2026-01-05T10:00:00Z', 'sell', 'BBB', 250),
+    tx('2026-01-06T10:00:00Z', 'fee_sec', '', -0.05),
+    tx('2026-01-07T10:00:00Z', 'dividend', 'AAA', 2),
+  ];
+  const s = summarize(rows, { BBB: 'sold' }, { AAA: held(5, 225.5) });
+  assert.equal(s.totalProfit, s.cash + s.stillInvested - s.moneyAdded);
+});
+
 test('rows are processed by time whatever order they arrive in', () => {
   const rows = [
     tx('2026-02-01T10:00:00Z', 'sell', 'AAA', 150, 10),
