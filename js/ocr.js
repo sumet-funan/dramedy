@@ -1,7 +1,7 @@
 // Reads screenshots inside the browser, so they never leave the device. The
 // engine is large, so it only loads when someone picks an image.
 
-import { MONTH_LETTERS } from './trade-screen.js';
+import { MONTH_LETTERS, TIME } from './trade-screen.js';
 
 const ENGINE = new URL('../vendor/tesseract', import.meta.url).href;
 const SINGLE_BLOCK = '6';
@@ -22,6 +22,7 @@ async function startWorker(language) {
 // being read as lookalike letters.
 const ROW_CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,+- ';
 const DATE_CHARACTERS = '0123456789:. -';
+const AMOUNT_CHARACTERS = '0123456789.,+-USD ';
 
 // Small grey text on black reads far better enlarged and as dark on light.
 function cleanedCrop(bitmap, box, scale) {
@@ -67,12 +68,26 @@ function rowCrops(bitmap, usd) {
 
   const dateLeft = Math.max(0, usd.bbox.x1 - Math.round(bitmap.width * 0.346));
   const titleTop = Math.max(0, usd.bbox.y0 - Math.round(height / 3));
+  const amountLeft = Math.max(0, usd.bbox.x1 - Math.round(bitmap.width * 0.42));
+  const dateBox = (top) => ({
+    left: dateLeft,
+    top,
+    width: Math.min(Math.round(bitmap.width * 0.357), bitmap.width - dateLeft),
+    height: dateHeight,
+  });
+  const lowerTop = dateTop + dateHeight + Math.round(height / 2);
+
   return {
-    date: cleanedCrop(bitmap, {
-      left: dateLeft,
-      top: dateTop,
-      width: Math.min(Math.round(bitmap.width * 0.357), bitmap.width - dateLeft),
-      height: dateHeight,
+    date: cleanedCrop(bitmap, dateBox(dateTop), 3),
+    // A title on two lines pushes the date one line down.
+    lowerDate: lowerTop + dateHeight <= bitmap.height
+      ? cleanedCrop(bitmap, dateBox(lowerTop), 3)
+      : null,
+    amount: cleanedCrop(bitmap, {
+      left: amountLeft,
+      top: titleTop,
+      width: Math.min(usd.bbox.x1 + Math.round(height / 2), bitmap.width) - amountLeft,
+      height: height * 2,
     }, 3),
     title: cleanedCrop(bitmap, {
       left: Math.round(bitmap.width * 0.2),
@@ -121,15 +136,33 @@ export async function readTradeImages(files, onProgress) {
         .map((row) => ({ ...row, crops: rowCrops(bitmap, row.usd) }))
         .filter((row) => row.crops);
 
-      const dates = rows.map((row) => row.crops.date);
-      const digits = await readEach(english, {
+      const digitsOnly = {
         tessedit_pageseg_mode: SINGLE_LINE,
         tessedit_char_whitelist: DATE_CHARACTERS,
-      }, dates);
-      const months = await readEach(thai, {
+      };
+      const dateWords = {
         tessedit_pageseg_mode: SINGLE_LINE,
         tessedit_char_whitelist: `${DATE_CHARACTERS}${MONTH_LETTERS}`,
-      }, dates);
+      };
+      const dates = rows.map((row) => row.crops.date);
+      const digits = await readEach(english, digitsOnly, dates);
+      const months = await readEach(thai, dateWords, dates);
+
+      const lower = rows.flatMap((row, i) => (
+        row.crops.lowerDate && !TIME.test(digits[i]) && !TIME.test(months[i]) ? [i] : []
+      ));
+      const lowerDates = lower.map((i) => rows[i].crops.lowerDate);
+      const lowerDigits = await readEach(english, digitsOnly, lowerDates);
+      const lowerMonths = await readEach(thai, dateWords, lowerDates);
+      lower.forEach((rowIndex, i) => {
+        digits[rowIndex] = lowerDigits[i];
+        months[rowIndex] = lowerMonths[i];
+      });
+
+      const amounts = await readEach(english, {
+        tessedit_pageseg_mode: SINGLE_LINE,
+        tessedit_char_whitelist: AMOUNT_CHARACTERS,
+      }, rows.map((row) => row.crops.amount));
       const titles = await readEach(thai, {
         tessedit_pageseg_mode: SINGLE_LINE,
         tessedit_char_whitelist: '',
@@ -138,6 +171,7 @@ export async function readTradeImages(files, onProgress) {
       bitmap.close();
       images.push(rows.map((row, i) => ({
         line: row.line,
+        again: amounts[i].trim(),
         digits: digits[i].trim(),
         month: months[i].trim(),
         thai: titles[i].replace(/\s/g, ''),

@@ -710,6 +710,7 @@ function tradeImport() {
 // A doubt about a row clears only when a field that settles it changes, or when
 // the viewer says the row is right.
 const CHECKS = {
+  amount: { fields: ['amount', 'type'], text: () => t('tradeImage.checkAmount') },
   date: { fields: ['date'], text: () => t('tradeImage.checkDate') },
   ticker: { fields: ['ticker'], text: () => t('tradeImage.checkTicker') },
   figures: { fields: ['shares', 'perShare', 'total'], text: () => t('holdings.checkFigures') },
@@ -769,6 +770,7 @@ function reviewRow(entry, onRemove, onChecked) {
   };
 
   const checks = entry.checks ?? [
+    entry.checkAmount && 'amount',
     entry.checkDate && 'date',
     entry.checkTicker && 'ticker',
   ].filter(Boolean);

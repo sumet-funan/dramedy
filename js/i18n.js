@@ -201,6 +201,7 @@ export const messages = {
     'check.waiting.one': '{count} row still to check',
     'check.waiting.many': '{count} rows still to check',
 
+    'tradeImage.checkAmount': 'Check the amount and type',
     'tradeImage.checkDate': 'Check the date and time',
     'tradeImage.checkTicker': 'Check the ticker',
     'tradeImage.same': 'Already here, so this row will be skipped.',
@@ -437,6 +438,7 @@ export const messages = {
     'check.waiting.one': 'ต้องตรวจอีก {count} แถว',
     'check.waiting.many': 'ต้องตรวจอีก {count} แถว',
 
+    'tradeImage.checkAmount': 'โปรดตรวจจำนวนเงินและประเภท',
     'tradeImage.checkDate': 'โปรดตรวจวันที่และเวลา',
     'tradeImage.checkTicker': 'โปรดตรวจชื่อหุ้น',
     'tradeImage.same': 'มีรายการนี้อยู่แล้ว แถวนี้จะถูกข้าม',

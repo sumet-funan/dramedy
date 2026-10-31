@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  readAmountLine, readDateLine, readMonth, readTradeRows, readType, settleDates,
+  readAmountLine, readDateLine, readMonth, readTradeRows, readType, settleAmount, settleDates,
 } from '../js/trade-screen.js';
 
 test('reads an amount line', () => {
   assert.deepEqual(readAmountLine('AAAA -12.34 USD'), {
-    sign: '-', amount: 12.34, label: 'AAAA', knownLabel: false,
+    sign: '-', amount: 12.34, label: 'AAAA', knownLabel: false, noComma: false,
   });
   assert.equal(readAmountLine('+2,345.00 USD').amount, 2345);
   assert.equal(readAmountLine('12.34 THB'), null);
@@ -23,7 +23,9 @@ test('fee names count as known', () => {
 });
 
 test('reads a date line, taking the Buddhist year', () => {
-  assert.deepEqual(readDateLine('2 0.9.69 - 10:20:30'), { day: 2, time: '10:20:30', year: 2026 });
+  assert.deepEqual(readDateLine('2 0.9.69 - 10:20:30', '2 มิ.ย. 69 - 10:20:30'), {
+    day: 2, time: '10:20:30', year: 2026, unsure: false,
+  });
 });
 
 test('leaves a day alone when it runs into the month', () => {
@@ -37,6 +39,101 @@ test('reads months, preferring the longer match', () => {
   assert.equal(readMonth('มี.ค. 69'), 2);
   assert.equal(readMonth('ม.ค. 69'), 0);
   assert.equal(readMonth('กข'), null);
+});
+
+test('a month with a doubled letter still reads', () => {
+  assert.equal(readMonth('16 กก.ย. 69 - 10:20:30'), 8);
+});
+
+test('the Thai reading gives a day the digits lost', () => {
+  const digits = '1.. 69 - 10:20:30';
+  assert.deepEqual(readDateLine(digits, '11 พ.ค. 69 - 10:2 0'), {
+    day: 11, time: '10:20:30', year: 2026, unsure: false,
+  });
+  assert.equal(readDateLine('1.8.69 -10:20:30', '1เม.ย. 69 - 10:20:3 0').day, 1);
+});
+
+test('a time only the Thai reading found comes back unsure', () => {
+  const date = readDateLine('', '5 พ.ค. 69 - 10:20:30');
+  assert.equal(date.time, '10:20:30');
+  assert.equal(date.unsure, true);
+});
+
+test('a time with a stray digit stuck to it does not count', () => {
+  assert.equal(readDateLine('3..69-07:4152', '3 ก.ค. 69 - 017:41:152').time, null);
+});
+
+test('between two days of the same length the digits win, and it stays unsure', () => {
+  const date = readDateLine('23 1.9. 69 - 10:20:30', '25ก.ย. 69 - 10:20:30');
+  assert.equal(date.day, 23);
+  assert.equal(date.unsure, true);
+});
+
+test('the digits give a day the Thai reading cut short', () => {
+  assert.equal(readDateLine('21 .. 69 - 10:20:30', '2 พ.ค. 69 - 10:20:30').day, 21);
+});
+
+test('a row with no time does not move the rows after it to another month', () => {
+  const rows = settleDates([
+    { day: 25, time: '10:00:00', year: 2026, month: 8 },
+    { day: 9, time: null, year: null, month: null },
+    { day: 17, time: '09:00:00', year: 2026, month: 8 },
+  ]);
+  assert.equal(rows[1].doubtful, true);
+  assert.equal(rows[2].date, '2026-09-17T09:00:00');
+});
+
+const amountOf = (text) => readAmountLine(text);
+
+test('an amount read the same way twice needs no checking', () => {
+  assert.deepEqual(settleAmount(amountOf('AAAA -12.34 USD'), amountOf('-12.34 USD')), {
+    sign: '-', amount: 12.34, checkAmount: false,
+  });
+});
+
+test('the enlarged reading gives back a lost sign', () => {
+  assert.deepEqual(settleAmount(amountOf('AAAA 12.34 USD'), amountOf('-12.34 USD')), {
+    sign: '-', amount: 12.34, checkAmount: false,
+  });
+});
+
+test('amounts that differ are marked and the enlarged one is used', () => {
+  assert.deepEqual(settleAmount(amountOf('AAAA -1234.56 USD'), amountOf('-124.56 USD')), {
+    sign: '-', amount: 124.56, checkAmount: true,
+  });
+});
+
+test('a large amount without a comma is marked', () => {
+  assert.equal(settleAmount(amountOf('AAAA -1234.56 USD'), null).checkAmount, true);
+  assert.equal(settleAmount(amountOf('AAAA -1,234.56 USD'), null).checkAmount, false);
+});
+
+test('an amount with no sign at all is marked', () => {
+  assert.equal(settleAmount(amountOf('AAAA 12.34 USD'), null).checkAmount, true);
+});
+
+test('a row whose first reading failed is kept and marked', () => {
+  const [row] = readTradeRows([[{
+    line: 'AAAA', again: '-12.34 USD', digits: 'x', month: 'x', thai: 'ซื้อ',
+  }]], []);
+  assert.equal(row.amount, 12.34);
+  assert.equal(row.checkAmount, true);
+});
+
+test('a purchase with no sign read stays a purchase and is marked', () => {
+  const [row] = readTradeRows([[{
+    line: 'AAAA 12.34 USD', digits: 'x', month: 'x', thai: 'ซื้อAAAA',
+  }]], ['AAAA']);
+  assert.equal(row.type, 'buy');
+  assert.equal(row.checkAmount, true);
+});
+
+test('a sale with no sign read stays a sale and is marked', () => {
+  const [row] = readTradeRows([[{
+    line: 'AAAA 12.34 USD', digits: 'x', month: 'x', thai: 'ขายAAAA',
+  }]], ['AAAA']);
+  assert.equal(row.type, 'sell');
+  assert.equal(row.checkAmount, true);
 });
 
 test('reads row types', () => {
@@ -102,6 +199,7 @@ test('turns screenshots into rows and drops overlaps', () => {
       ticker: 'AAAA',
       amount: 10,
       date: '2026-06-05T10:00:00',
+      checkAmount: false,
       checkDate: false,
       checkTicker: false,
     },
@@ -110,6 +208,7 @@ test('turns screenshots into rows and drops overlaps', () => {
       ticker: '',
       amount: 0.05,
       date: '2026-06-05T09:00:00',
+      checkAmount: false,
       checkDate: false,
       checkTicker: false,
     },
