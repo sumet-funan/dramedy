@@ -16,6 +16,7 @@ const PATHS = {
   alert: 'M12 4L2.8 20h18.4zM12 10v4.5M12 17.5h.01',
   check: 'M5 12.5l4.5 4.5L19 7.5',
   close: 'M6 6l12 12M18 6L6 18',
+  sync: 'M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4',
 };
 
 export function icon(name) {

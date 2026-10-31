@@ -36,6 +36,7 @@ const VIEWS = [
 ];
 
 const STOCK_FILTERS = ['all', 'review', 'holding', 'sold'];
+const ADD_MODES = ['trade', 'holdings'];
 
 // Within this, the saved cost is the broker's own figure and the screenshot's is
 // a sum of rounded ones, so the saved cost stays.
@@ -50,6 +51,7 @@ const state = {
   email: '',
   view: 'overview',
   stockFilter: 'all',
+  addMode: 'trade',
   tradeSearch: '',
   tradeType: '',
   openTrade: null,
@@ -129,6 +131,7 @@ function describeError(error) {
   if (error?.code === 'over_email_send_rate_limit') {
     return t('error.emailLimit');
   }
+  if (/^Functions/.test(error?.name)) return t('sync.error');
   if (error?.code === 'invalid_credentials') {
     return t('error.credentials');
   }
@@ -216,6 +219,18 @@ function render() {
     tabBar(),
   ].filter(Boolean));
   updateNavbar();
+}
+
+function segmented(label, options, current, labelOf, pick) {
+  return h('div', { class: 'segmented', role: 'group', 'aria-label': label },
+    options.map((option) => h('button', {
+      type: 'button',
+      'aria-pressed': current === option ? 'true' : 'false',
+      onClick: () => {
+        pick(option);
+        render();
+      },
+    }, labelOf(option))));
 }
 
 function section(title, content, footer) {
@@ -407,21 +422,46 @@ function stockRow(stock) {
     h('div', { class: 'row-end' }, stockAmounts(stock)));
 }
 
+// Prices come from the server, because market sites don't answer browsers directly.
+function syncPrices(event) {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.querySelector('.row-subtitle').textContent = t('sync.running');
+
+  return run(async () => {
+    const { prices, failed } = await state.store.fetchPrices();
+    const changes = Object.entries(prices).map(([ticker, price]) => ({ ticker, price }));
+    if (changes.length === 0) throw new Error(t('sync.none'));
+    await state.store.setPrices(changes);
+    return { updated: changes.length, failed };
+  }, ({ updated, failed }) => [
+    plural('sync.done', updated),
+    failed.length > 0 && t('sync.missed', { tickers: failed.join(', ') }),
+  ].filter(Boolean).join(' '));
+}
+
+function syncButton() {
+  const dates = state.summary.stocks.map((stock) => stock.priceUpdatedAt).filter(Boolean).sort();
+
+  return h('button', { class: 'card row row-button', type: 'button', onClick: syncPrices },
+    h('span', { class: 'row-icon' }, icon('sync')),
+    h('span', { class: 'row-main' },
+      h('span', { class: 'row-title' }, t('sync.title')),
+      h('span', { class: 'row-subtitle' }, dates.length > 0
+        ? t('sync.last', { date: formats.date.format(new Date(dates.at(-1))) })
+        : t('sync.never'))));
+}
+
 function renderStocks() {
   const stocks = state.summary.stocks.filter(
     (stock) => state.stockFilter === 'all' || stock.status === state.stockFilter,
   );
 
   return h('div', { class: 'stack' },
-    h('div', { class: 'segmented', role: 'group', 'aria-label': t('filter.label') },
-      STOCK_FILTERS.map((filter) => h('button', {
-        type: 'button',
-        'aria-pressed': state.stockFilter === filter ? 'true' : 'false',
-        onClick: () => {
-          state.stockFilter = filter;
-          render();
-        },
-      }, t(`filter.${filter}`)))),
+    state.summary.heldCount > 0 && syncButton(),
+    segmented(t('filter.label'), STOCK_FILTERS, state.stockFilter, (filter) => t(`filter.${filter}`), (filter) => {
+      state.stockFilter = filter;
+    }),
     stocks.length > 0
       ? h('ul', { class: 'card' }, stocks.map(stockRow))
       : h('div', { class: 'card card-note' }, t('filter.empty')));
@@ -552,6 +592,14 @@ function formRow(label, control) {
 }
 
 function renderAdd() {
+  return h('div', { class: 'stack' },
+    segmented(t('add.label'), ADD_MODES, state.addMode, (mode) => t(`add.${mode}`), (mode) => {
+      state.addMode = mode;
+    }),
+    state.addMode === 'trade' ? tradeForm() : holdingsForm());
+}
+
+function tradeForm() {
   const ticker = formRow(t('form.ticker'), h('input', {
     name: 'ticker',
     placeholder: t('form.required'),
@@ -631,46 +679,6 @@ async function importFile(event) {
     () => state.store.importRows(rows),
     (added) => t('data.imported', { added, skipped: rows.length - added }),
   );
-}
-
-function pricesForm() {
-  const held = state.summary.stocks.filter((stock) => stock.fromHolding);
-  if (held.length === 0) return null;
-
-  const submit = (event) => {
-    event.preventDefault();
-    const form = new FormData(event.target);
-    const changes = held
-      .map((stock) => {
-        const text = String(form.get(stock.ticker)).trim();
-        return { ticker: stock.ticker, price: text === '' ? null : Number(text), before: stock.price };
-      })
-      .filter(({ price, before }) => price !== before);
-
-    if (changes.length === 0) {
-      setNotice('good', t('prices.unchanged'));
-      render();
-      return;
-    }
-    run(
-      () => state.store.setPrices(changes),
-      plural('prices.saved', changes.length),
-    );
-  };
-
-  return section(t('prices.title'), h('form', { class: 'card', onSubmit: submit },
-    held.map((stock) => formRow(stock.ticker, h('input', {
-      name: stock.ticker,
-      type: 'number',
-      step: 'any',
-      min: '0',
-      inputmode: 'decimal',
-      placeholder: t('prices.placeholder'),
-      value: stock.price ?? '',
-      'aria-label': t('prices.label', { ticker: stock.ticker }),
-    }))),
-    h('button', { class: 'row row-button action', type: 'submit' }, t('prices.save'))),
-  t('prices.footer'));
 }
 
 // A dropped minus sign still saves, so the total goes in front of the viewer to
@@ -841,7 +849,7 @@ function holdingsForm() {
     ? t('holdings.updated', { date: formats.date.format(new Date(dates.at(-1))) })
     : '';
 
-  return section(t('holdings.title'), h('form', { class: 'card', onSubmit: submit },
+  return section(null, h('form', { class: 'card', onSubmit: submit },
     list,
     note,
     h('label', { class: 'row row-button action' }, t('image.import'), h('input', {
@@ -881,8 +889,6 @@ function passwordForm() {
 
 function renderMore() {
   return h('div', { class: 'stack' },
-    pricesForm(),
-    holdingsForm(),
     section(t('data.title'), h('div', { class: 'card' },
       h('label', { class: 'row row-button' },
         h('span', { class: 'row-icon' }, icon('import')),

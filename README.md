@@ -41,6 +41,14 @@ Holdings can be filled in from screenshots of the broker's portfolio screen. The
 text is read in the browser by Tesseract in `vendor/tesseract`, so images are
 never uploaded, and nothing is saved until the form is checked and submitted.
 
+## Market prices
+
+The sync button on Stocks calls the `market-prices` Edge Function in
+`supabase/functions`. It reads the owner's tickers under the owner's own token
+and asks Yahoo Finance's public chart endpoint, which is unofficial and can stop
+working without notice. Prices are the latest regular market price, usually
+delayed, so they can differ a little from the broker's.
+
 ## Database
 
 Schema and access rules are in `supabase/migrations`.

@@ -74,6 +74,12 @@ export function createSupabaseStore(client, userId) {
 
     setPrices,
 
+    async fetchPrices() {
+      const { data, error } = await client.functions.invoke('market-prices');
+      if (error) throw error;
+      return data;
+    },
+
     // Replaces the whole list: anything traded but not listed is now fully sold.
     // Prices are saved separately so a row without one keeps the price it had.
     async replaceHoldings(rows, soldTickers) {
@@ -139,6 +145,14 @@ export function createDemoStore({ transactions, statuses, holdings }) {
       prices.forEach(({ ticker, price }) => {
         held[ticker] = { ...held[ticker], current_price_usd: price, price_updated_at };
       });
+    },
+    // Made-up movement, so nothing leaves the page in the demo.
+    async fetchPrices() {
+      const prices = Object.entries(held).map(([ticker, row]) => {
+        const price = row.current_price_usd ?? row.total_cost_usd / row.shares;
+        return [ticker, Math.round(price * 101) / 100];
+      });
+      return { prices: Object.fromEntries(prices), failed: [] };
     },
     async replaceHoldings(listed, soldTickers) {
       const updated_at = new Date().toISOString();

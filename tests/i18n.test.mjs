@@ -34,12 +34,12 @@ test('every key used in the code exists', () => {
 test('text follows the chosen language and fills in values', () => {
   setLanguage('th');
   assert.equal(t('stock.trades', { bought: '$1.00', sold: '$2.00' }), 'ซื้อ $1.00 · ขาย $2.00');
-  assert.equal(plural('prices.saved', 2), 'บันทึกราคา 2 ตัวแล้ว');
+  assert.equal(plural('review.title', 2), 'มีหุ้น 2 ตัวที่ต้องระบุสถานะ');
 
   setLanguage('en');
   assert.equal(t('stock.trades', { bought: '$1.00', sold: '$2.00' }), 'Bought $1.00 · Sold $2.00');
-  assert.equal(plural('prices.saved', 1), '1 price saved');
-  assert.equal(plural('prices.saved', 2), '2 prices saved');
+  assert.equal(plural('review.title', 1), '1 stock needs a status');
+  assert.equal(plural('review.title', 2), '2 stocks need a status');
 });
 
 test('import errors follow the chosen language', () => {
