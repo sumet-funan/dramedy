@@ -1244,6 +1244,10 @@ label.row:focus-within {
   margin-top: 4px;
 }
 
+.holding-fields:not(.review) .holding-field:last-child {
+  grid-column: 1 / -1;
+}
+
 .holding-field {
   display: grid;
   gap: 3px;

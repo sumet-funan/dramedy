@@ -1,7 +1,8 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import { monthOf, summarize, toCents } from './calc.js';
 import {
-  isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, readPortfolio, toCsv,
+  COST_TOLERANCE_USD, figuresAgree, isPositiveType, needsTicker, normalizeRow, parseCsv,
+  readHoldings, readPortfolio, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
 import { DUPLICATE_ROW, fillsShares, findDuplicates } from './duplicates.js';
@@ -39,10 +40,6 @@ const VIEWS = [
 
 const STOCK_FILTERS = ['all', 'review', 'holding', 'sold'];
 const ADD_MODES = ['trade', 'holdings'];
-
-// Within this, the saved cost is the broker's own figure and the screenshot's is
-// a sum of rounded ones, so the saved cost stays.
-const COST_TOLERANCE_USD = 0.05;
 
 const root = document.getElementById('app');
 const isDemo = new URLSearchParams(location.search).has('demo');
@@ -716,7 +713,7 @@ function tradeImport() {
 const CHECKS = {
   date: { fields: ['date'], text: () => t('tradeImage.checkDate') },
   ticker: { fields: ['ticker'], text: () => t('tradeImage.checkTicker') },
-  figures: { fields: ['total', 'unrealized'], text: () => t('holdings.checkFigures') },
+  figures: { fields: ['value', 'percent', 'unrealized'], text: () => t('holdings.checkFigures') },
   shares: { fields: ['shares'], text: () => t('holdings.checkShares') },
 };
 
@@ -1060,8 +1057,6 @@ function unrealizedCheck(entries) {
   return `\n\n${t('holdings.check', { amount: signedMoney(cents) })}`;
 }
 
-const RESULT_EXAMPLE = '-12.34';
-
 function holdingField(name, label, props = {}) {
   return h('label', { class: 'holding-field' },
     h('span', {}, label),
@@ -1080,6 +1075,15 @@ const holdingEntry = (row) => ({
   checks: checksOf(row),
 });
 
+// The three figures of a row on the broker's screen have to fit each other, so a
+// mistyped one shows as soon as it's entered.
+function figuresOff(row) {
+  const { value, percent, unrealized } = holdingEntry(row);
+  return value !== '' && percent !== '' && unrealized !== '' && !figuresAgree({
+    value: Number(value), percent: Number(percent), unrealized: Number(unrealized),
+  });
+}
+
 function holdingRow(saved, entry, onRemove, onChecked) {
   const hint = h('p', { class: 'holding-hint', hidden: true });
 
@@ -1093,9 +1097,14 @@ function holdingRow(saved, entry, onRemove, onChecked) {
       ? t('holdings.heldHint', { shares: held.shares.toLocaleString('en-US') })
       : t('holdings.newHint');
     fieldOf(row, 'shares').placeholder = held?.shares ?? t('form.required');
-    fieldOf(row, 'total').placeholder = held?.total ?? t('form.required');
-    fieldOf(row, 'unrealized').placeholder = held?.unrealized ?? RESULT_EXAMPLE;
-    showChecks(row, unsettled(row, event?.target.name));
+    fieldOf(row, 'value').placeholder = held?.value ?? t('form.required');
+    fieldOf(row, 'percent').placeholder = t('form.optional');
+    fieldOf(row, 'unrealized').placeholder = held?.unrealized ?? t('form.required');
+
+    const field = event?.target.name;
+    const checks = unsettled(row, field);
+    const recheck = CHECKS.figures.fields.includes(field) && figuresOff(row);
+    showChecks(row, recheck ? [...checks, 'figures'] : checks);
   };
 
   const row = h('li', {
@@ -1127,14 +1136,15 @@ function holdingRow(saved, entry, onRemove, onChecked) {
       onChecked();
     }),
     h('div', { class: 'holding-fields' },
+      holdingField('value', t('holdings.value'), {
+        min: '0', inputmode: 'decimal', value: entry.value ?? '',
+      }),
+      // No inputmode on these two, because the decimal keypad on iPhones has no minus key.
+      holdingField('percent', t('holdings.percent'), { value: entry.percent ?? '' }),
+      holdingField('unrealized', t('holdings.unrealized'), { value: entry.unrealized ?? '' }),
       holdingField('shares', t('form.shares'), {
         min: '0', inputmode: 'decimal', value: entry.shares ?? '',
-      }),
-      holdingField('total', t('holdings.total'), {
-        min: '0', inputmode: 'decimal', value: entry.total ?? '',
-      }),
-      // No inputmode here, because the decimal keypad on iPhones has no minus key.
-      holdingField('unrealized', t('holdings.unrealized'), { value: entry.unrealized ?? '' })));
+      })));
   refresh();
   return row;
 }
@@ -1146,6 +1156,7 @@ function savedHoldings() {
     {
       shares: stock.sharesHeld,
       total: stock.costLeft / 100,
+      value: stock.marketValue === null ? undefined : stock.marketValue / 100,
       unrealized: stock.unrealized === null ? undefined : stock.unrealized / 100,
     },
   ]));
@@ -1170,7 +1181,8 @@ function fillHoldings(list, stocks, saved, newRow) {
     const moved = held && Math.abs(held.total - stock.total) > COST_TOLERANCE_USD;
 
     if (held) fieldOf(row, 'shares').value = held.shares;
-    fieldOf(row, 'total').value = held && !moved ? held.total : stock.total;
+    fieldOf(row, 'value').value = stock.value;
+    fieldOf(row, 'percent').value = stock.percent;
     fieldOf(row, 'unrealized').value = stock.unrealized;
     row.dataset.checks = [!stock.agrees && 'figures', moved && 'shares'].filter(Boolean).join(' ');
     fieldOf(row, 'ticker').dispatchEvent(new Event('input', { bubbles: true }));
@@ -1191,15 +1203,17 @@ function imageSummary(stocks, saved) {
 }
 
 // One line per stock, so the viewer can see what a save replaces before it does.
-function changeLine(row, typedResult, held) {
-  const { ticker, shares, total_cost_usd: total } = row;
+function changeLine(row, held) {
+  const {
+    ticker, shares, total_cost_usd: total, current_price_usd: price,
+  } = row;
   if (!held) {
     return t('holdings.newLine', {
       ticker, shares: shares.toLocaleString('en-US'), cost: money(toCents(total)),
     });
   }
 
-  const result = typedResult === '' ? held.unrealized : Number(typedResult);
+  const result = price === undefined ? held.unrealized : toCents(price * shares - total) / 100;
   const resultText = (value) => (value === undefined ? '—' : signedMoney(toCents(value)));
   const changes = [
     shares !== held.shares && t('holdings.sharesChange', { from: held.shares, to: shares }),
@@ -1299,8 +1313,7 @@ function holdingsForm() {
     }
     show('');
 
-    const typed = Object.fromEntries(entries.map((entry) => [entry.ticker.toUpperCase(), entry.unrealized]));
-    const lines = rows.map((row) => changeLine(row, typed[row.ticker], saved[row.ticker]));
+    const lines = rows.map((row) => changeLine(row, saved[row.ticker]));
     if (confirm(`${t('holdings.confirm')}\n\n${lines.join('\n')}${unrealizedCheck(entries)}`)) {
       run(() => state.store.saveHoldings(rows), () => {
         state.holdingDraft = [];

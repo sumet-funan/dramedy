@@ -56,17 +56,29 @@ export function normalizeRow(input) {
   };
 }
 
-// Despite its name, the broker's "มูลค่า" line is profit or loss on the shares
-// held, not their value. Adding it to the cost gives the value, and so the price.
-const impliedPrice = ({ shares, total, unrealized }) => (
-  Math.round(((total + unrealized) / shares) * 1e6) / 1e6
-);
+// Close to this, the saved cost stays, because it's the broker's own figure and the
+// one worked out from the screen comes from rounded ones.
+export const COST_TOLERANCE_USD = 0.05;
 
-// Reads the holdings form. A stock already held keeps any figure left blank, so
-// a row can update just its result. Anything new needs its shares and cost.
+// The screen shows a stock's value and its gain or loss, so the cost is the
+// difference. With only one of them, a stock already held keeps its cost.
+function costFrom(entry, held) {
+  if (entry.value === '' || entry.unrealized === '') return held?.total;
+  const cost = roundCents(Number(entry.value) - Number(entry.unrealized));
+  return held && Math.abs(held.total - cost) <= COST_TOLERANCE_USD ? held.total : cost;
+}
+
+function worthOf(entry, total) {
+  if (entry.value !== '') return Number(entry.value);
+  return entry.unrealized === '' ? null : total + Number(entry.unrealized);
+}
+
+// Reads the holdings form, which follows the broker's portfolio screen. A stock
+// already held keeps any figure left blank, so a row can update just one of them.
+// Anything new needs its shares, value and gain or loss.
 export function readHoldings(entries, saved = {}) {
   const filled = entries.filter((entry) => (
-    entry.ticker || entry.shares || entry.total || entry.unrealized
+    entry.ticker || entry.shares || entry.value || entry.percent || entry.unrealized
   ));
   if (filled.length === 0) return { rows: [], errors: [t('holdings.none')], problems: [] };
 
@@ -76,27 +88,25 @@ export function readHoldings(entries, saved = {}) {
     const ticker = entry.ticker.toUpperCase();
     const held = saved[ticker];
     const shares = entry.shares === '' ? held?.shares : Number(entry.shares);
-    const total = entry.total === '' ? held?.total : Number(entry.total);
-    const unrealized = Number(entry.unrealized);
-    const hasResult = entry.unrealized !== '';
+    const total = costFrom(entry, held);
+    const worth = worthOf(entry, total);
     const index = entries.indexOf(entry);
     const report = (key, values) => problems.push({ index, message: t(key, values) });
 
     if (!TICKER_PATTERN.test(ticker)) report('holdings.badTicker', { row: index + 1 });
     else if (seen.has(ticker)) report('holdings.twice', { ticker });
-    else if (held && !entry.shares && !entry.total && !hasResult) {
+    else if (held && !entry.shares && !entry.value && !entry.unrealized) {
       report('holdings.nothing', { ticker });
     } else if (!(shares > 0)) report('holdings.noShares', { ticker });
-    else if (!(total >= 0)) report('holdings.noTotal', { ticker });
-    else if (hasResult && !(total + unrealized >= 0)) {
-      report('holdings.lossTooLarge', { ticker });
-    }
+    else if (total === undefined) report('holdings.noFigures', { ticker });
+    else if (total < 0) report('holdings.gainTooLarge', { ticker });
+    else if (worth < 0) report('holdings.lossTooLarge', { ticker });
     seen.add(ticker);
 
     const row = { ticker, shares, total_cost_usd: total };
-    return hasResult
-      ? { ...row, current_price_usd: impliedPrice({ shares, total, unrealized }) }
-      : row;
+    return worth === null
+      ? row
+      : { ...row, current_price_usd: Math.round((worth / shares) * 1e6) / 1e6 };
   });
 
   return { rows, errors: problems.map((problem) => problem.message), problems };
@@ -113,7 +123,7 @@ const roundCents = (value) => Math.round(value * 100) / 100;
 
 // The screen shows value, gain or loss and percentage, so a misread figure leaves
 // the three disagreeing.
-function figuresAgree({ value, unrealized, percent }) {
+export function figuresAgree({ value, unrealized, percent }) {
   const cost = value - unrealized;
   return cost > 0 && Math.abs((unrealized / cost) * 100 - percent) <= PERCENT_TOLERANCE;
 }
@@ -129,8 +139,8 @@ function settleSign({ value, unrealized, percent }) {
     percent: candidate * Math.abs(percent),
   }));
   return sign
-    ? { unrealized: sign * Math.abs(unrealized), agrees: true }
-    : { unrealized, agrees: false };
+    ? { unrealized: sign * Math.abs(unrealized), percent: sign * Math.abs(percent), agrees: true }
+    : { unrealized, percent, agrees: false };
 }
 
 // Reads the broker's portfolio screen, where each stock takes two lines. The
@@ -145,9 +155,14 @@ export function readPortfolio(text) {
     if (stock) {
       open = { ticker: stock[1], value: readAmount(stock[2]), percent: readAmount(stock[3]) };
     } else if (result && open) {
-      const { unrealized, agrees } = settleSign({ ...open, unrealized: readAmount(result[1]) });
+      const { unrealized, percent, agrees } = settleSign({
+        ...open,
+        unrealized: readAmount(result[1]),
+      });
       stocks.push({
         ticker: open.ticker,
+        value: open.value,
+        percent,
         unrealized,
         total: roundCents(open.value - unrealized),
         agrees,

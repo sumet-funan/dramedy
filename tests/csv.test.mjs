@@ -58,42 +58,34 @@ test('strips a byte order mark and handles Windows line endings', () => {
   assert.equal(rows.length, 1);
 });
 
-const entry = (ticker, shares, total, unrealized = '') => ({
-  ticker, shares, total, unrealized,
+const entry = (ticker, shares, value, unrealized = '', percent = '') => ({
+  ticker, shares, value, unrealized, percent,
 });
 
-test('reads the holdings form', () => {
-  assert.deepEqual(readHoldings([entry('aaa', '10', '25'), entry('BBB', '0.5', '20')]), {
+test('works out the cost and price when saving', () => {
+  assert.deepEqual(readHoldings([entry('aaa', '10', '20', '-5'), entry('BBB', '0.5', '30', '10')]), {
     rows: [
-      { ticker: 'AAA', shares: 10, total_cost_usd: 25 },
-      { ticker: 'BBB', shares: 0.5, total_cost_usd: 20 },
+      { ticker: 'AAA', shares: 10, total_cost_usd: 25, current_price_usd: 2 },
+      { ticker: 'BBB', shares: 0.5, total_cost_usd: 20, current_price_usd: 60 },
     ],
     errors: [],
     problems: [],
   });
 });
 
-test('works out the price from the profit or loss', () => {
-  const { rows, errors } = readHoldings([entry('AAA', '10', '25', '-5')]);
-  assert.deepEqual(errors, []);
-  assert.deepEqual(rows, [{
-    ticker: 'AAA', shares: 10, total_cost_usd: 25, current_price_usd: 2,
-  }]);
+test('cents stay exact when the cost is worked out', () => {
+  const [row] = readHoldings([entry('AAA', '1', '10.10', '-0.20')]).rows;
+  assert.equal(row.total_cost_usd, 10.3);
 });
 
-test('an implied price gives back the exact value for fractional shares', () => {
-  const [row] = readHoldings([entry('AAA', '0.3', '30', '-7.77')]).rows;
+test('a price gives back the exact value for fractional shares', () => {
+  const [row] = readHoldings([entry('AAA', '0.3', '22.23', '-7.77')]).rows;
   assert.equal(Math.round(row.shares * row.current_price_usd * 100), 2223);
-});
-
-test('a blank result leaves the price out', () => {
-  const [row] = readHoldings([entry('AAA', '10', '25')]).rows;
-  assert.equal('current_price_usd' in row, false);
 });
 
 const saved = { AAA: { shares: 10, total: 25 } };
 
-test('a stock already held keeps the figures left blank', () => {
+test('a stock already held keeps its cost when given only a gain or loss', () => {
   const { rows, errors } = readHoldings([entry('aaa', '', '', '-5')], saved);
   assert.deepEqual(errors, []);
   assert.deepEqual(rows, [{
@@ -101,52 +93,87 @@ test('a stock already held keeps the figures left blank', () => {
   }]);
 });
 
-test('typed figures replace the saved ones', () => {
-  const [row] = readHoldings([entry('AAA', '20', '60')], saved).rows;
-  assert.deepEqual(row, { ticker: 'AAA', shares: 20, total_cost_usd: 60 });
+test('a stock already held keeps its cost when given only a value', () => {
+  const [row] = readHoldings([entry('AAA', '', '30')], saved).rows;
+  assert.deepEqual(row, {
+    ticker: 'AAA', shares: 10, total_cost_usd: 25, current_price_usd: 3,
+  });
+});
+
+test('a new share count alone leaves the cost and price', () => {
+  const [row] = readHoldings([entry('AAA', '20', '')], saved).rows;
+  assert.deepEqual(row, { ticker: 'AAA', shares: 20, total_cost_usd: 25 });
+});
+
+test('value and gain or loss replace a saved cost', () => {
+  const [row] = readHoldings([entry('AAA', '20', '60', '12')], saved).rows;
+  assert.deepEqual(row, {
+    ticker: 'AAA', shares: 20, total_cost_usd: 48, current_price_usd: 3,
+  });
+});
+
+test('a cost within the rounding of the screen stays as saved', () => {
+  const [row] = readHoldings([entry('AAA', '', '20.03', '-5')], saved).rows;
+  assert.equal(row.total_cost_usd, 25);
 });
 
 test('a stock already held needs at least one figure', () => {
+  const expected = ['AAA: enter at least one figure'];
+  assert.deepEqual(readHoldings([entry('AAA', '', '')], saved).errors, expected);
+  assert.deepEqual(readHoldings([entry('AAA', '', '', '', '-5')], saved).errors, expected);
+});
+
+test('a new stock needs its shares, value and gain or loss', () => {
+  assert.deepEqual(readHoldings([entry('BBB', '', '20', '-5')], saved).errors, ['BBB has no share count']);
   assert.deepEqual(
-    readHoldings([entry('AAA', '', '')], saved).errors,
-    ['AAA: enter at least one figure'],
+    readHoldings([entry('BBB', '1', '', '-5')], saved).errors,
+    ['BBB needs its value and unrealized'],
+  );
+  assert.deepEqual(
+    readHoldings([entry('BBB', '1', '20')], saved).errors,
+    ['BBB needs its value and unrealized'],
   );
 });
 
-test('a new stock needs its shares and cost', () => {
-  assert.deepEqual(readHoldings([entry('BBB', '', '', '-5')], saved).errors, ['BBB has no share count']);
-  assert.deepEqual(readHoldings([entry('BBB', '1', '', '-5')], saved).errors, ['BBB has no total cost']);
-});
-
 test('a problem points at its row, counting blank rows', () => {
-  const { problems } = readHoldings([entry('', '', ''), entry('AAA', '', '1')]);
+  const { problems } = readHoldings([entry('', '', ''), entry('AAA', '', '1', '0')]);
   assert.deepEqual(problems, [{ index: 1, message: 'AAA has no share count' }]);
 });
 
 test('skips blank rows', () => {
-  const { rows, errors } = readHoldings([entry('', '', ''), entry('AAA', '1', '1')]);
+  const { rows, errors } = readHoldings([entry('', '', ''), entry('AAA', '1', '1', '0')]);
   assert.deepEqual(errors, []);
   assert.equal(rows.length, 1);
 });
 
-test('a total cost of zero counts, but a blank one does not', () => {
-  assert.deepEqual(readHoldings([entry('AAA', '1', '0')]).errors, []);
-  assert.deepEqual(readHoldings([entry('AAA', '1', '')]).errors, ['AAA has no total cost']);
+test('a gain or loss of zero counts, but a blank one does not', () => {
+  assert.deepEqual(readHoldings([entry('AAA', '1', '5', '0')]).errors, []);
+  assert.deepEqual(
+    readHoldings([entry('AAA', '1', '5', '')]).errors,
+    ['AAA needs its value and unrealized'],
+  );
 });
 
-test('rejects a loss larger than the cost', () => {
+test('rejects a gain larger than the value', () => {
   assert.deepEqual(
-    readHoldings([entry('AAA', '10', '25', '-30')]).errors,
+    readHoldings([entry('AAA', '10', '25', '30')]).errors,
+    ['AAA: the gain is larger than the value'],
+  );
+});
+
+test('rejects a loss larger than the saved cost', () => {
+  assert.deepEqual(
+    readHoldings([entry('AAA', '', '', '-30')], saved).errors,
     ['AAA: the loss is larger than the total cost'],
   );
 });
 
 test('flags an empty form, bad tickers, missing shares and duplicates', () => {
   assert.deepEqual(readHoldings([]).errors, ['Add at least one stock']);
-  assert.deepEqual(readHoldings([entry('', '1', '1')]).errors, ['Row 1 needs a valid ticker']);
-  assert.deepEqual(readHoldings([entry('AAA', '', '1')]).errors, ['AAA has no share count']);
+  assert.deepEqual(readHoldings([entry('', '1', '1', '0')]).errors, ['Row 1 needs a valid ticker']);
+  assert.deepEqual(readHoldings([entry('AAA', '', '1', '0')]).errors, ['AAA has no share count']);
   assert.deepEqual(
-    readHoldings([entry('AAA', '1', '1'), entry('aaa', '1', '1')]).errors,
+    readHoldings([entry('AAA', '1', '1', '0'), entry('aaa', '1', '1', '0')]).errors,
     ['AAA is listed twice'],
   );
 });
@@ -154,15 +181,15 @@ test('flags an empty form, bad tickers, missing shares and duplicates', () => {
 const screen = (line, result) => `${line}\n12.00% 1,000.00 THB (${result} USD)`;
 
 test('reads a stock from the portfolio screen', () => {
-  assert.deepEqual(readPortfolio(screen('Q AAA 300.00 N -25.00%', '-100.00')), [{
-    ticker: 'AAA', unrealized: -100, total: 400, agrees: true,
+  assert.deepEqual(readPortfolio(screen('Q AAA 312.00 N -25.00%', '-104.00')), [{
+    ticker: 'AAA', value: 312, percent: -25, unrealized: -104, total: 416, agrees: true,
   }]);
 });
 
 test('reads gains and thousands separators', () => {
-  const [stock] = readPortfolio(screen('BB.A 1,500.00 +50.00%', '+500.00'));
+  const [stock] = readPortfolio(screen('ZZ.A 1,560.00 +50.00%', '+520.00'));
   assert.deepEqual(stock, {
-    ticker: 'BB.A', unrealized: 500, total: 1000, agrees: true,
+    ticker: 'ZZ.A', value: 1560, percent: 50, unrealized: 520, total: 1040, agrees: true,
   });
 });
 
@@ -173,7 +200,9 @@ test('flags a misread figure', () => {
 });
 
 test('puts back a lost minus sign, wherever it was lost', () => {
-  const loss = { ticker: 'AAA', unrealized: -104, total: 416, agrees: true };
+  const loss = {
+    ticker: 'AAA', value: 312, percent: -25, unrealized: -104, total: 416, agrees: true,
+  };
   assert.deepEqual(readPortfolio(screen('AAA 312.00 N -25.00%', '104.00'))[0], loss);
   assert.deepEqual(readPortfolio(screen('AAA 312.00 N 25.00%', '-104.00'))[0], loss);
   assert.deepEqual(readPortfolio(screen('AAA 312.00 N 25.00%', '104.00'))[0], loss);
@@ -182,7 +211,7 @@ test('puts back a lost minus sign, wherever it was lost', () => {
 test('a gain with a stray minus sign stays a gain', () => {
   const [stock] = readPortfolio(screen('AAA 416.00 N -33.33%', '104.00'));
   assert.deepEqual(stock, {
-    ticker: 'AAA', unrealized: 104, total: 312, agrees: true,
+    ticker: 'AAA', value: 416, percent: 33.33, unrealized: 104, total: 312, agrees: true,
   });
 });
 
