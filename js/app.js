@@ -1,13 +1,14 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import { monthOf, summarize, toCents } from './calc.js';
 import {
-  isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, toCsv,
+  isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, readPortfolio, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
 import {
   LANGUAGES, applyLanguage, currentLanguage, plural, setLanguage, t,
 } from './i18n.js';
 import { icon } from './icons.js';
+import { readImages } from './ocr.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
 
 const TRADE_TYPES = [
@@ -35,6 +36,10 @@ const VIEWS = [
 ];
 
 const STOCK_FILTERS = ['all', 'review', 'holding', 'sold'];
+
+// Within this, the saved cost is the broker's own figure and the screenshot's is
+// a sum of rounded ones, so the saved cost stays.
+const COST_TOLERANCE_USD = 0.05;
 
 const root = document.getElementById('app');
 const isDemo = new URLSearchParams(location.search).has('demo');
@@ -728,10 +733,52 @@ function holdingEntry(row) {
   };
 }
 
+const tickerOf = (row) => row.querySelector('[name=ticker]').value.trim().toUpperCase();
+
+function rowFor(list, ticker) {
+  const found = [...list.children].find((row) => tickerOf(row) === ticker);
+  if (found) return found;
+
+  const row = holdingRow();
+  row.querySelector('[name=ticker]').value = ticker;
+  list.append(row);
+  return row;
+}
+
+// Fills rows without saving, so a misread figure can be fixed first. Returns the
+// stocks whose cost moved, because their share count may have moved too.
+function fillHoldings(list, stocks) {
+  const costChanged = [];
+  for (const stock of stocks) {
+    const row = rowFor(list, stock.ticker);
+    const total = row.querySelector('[name=total]');
+    const moved = Math.abs(Number(total.value) - stock.total) > COST_TOLERANCE_USD;
+
+    if (moved && total.value !== '') costChanged.push(stock.ticker);
+    if (moved) total.value = stock.total;
+    row.querySelector('[name=unrealized]').value = stock.unrealized;
+  }
+  return costChanged;
+}
+
+function imageSummary(list, stocks, costChanged) {
+  const read = new Set(stocks.map((stock) => stock.ticker));
+  const unread = [...list.children].map(tickerOf).filter((ticker) => ticker && !read.has(ticker));
+  const doubtful = stocks.filter((stock) => !stock.agrees).map((stock) => stock.ticker);
+  const mention = (key, tickers) => tickers.length > 0 && t(key, { tickers: tickers.join(', ') });
+
+  return [
+    plural('image.read', stocks.length),
+    mention('image.doubtful', doubtful),
+    mention('image.costChanged', costChanged),
+    mention('image.unread', unread),
+  ].filter(Boolean).join(' ');
+}
+
 function holdingsForm() {
   const held = state.summary.stocks.filter((stock) => stock.fromHolding);
   const list = h('ul', {}, held.length > 0 ? held.map((stock) => holdingRow(stock)) : holdingRow());
-  const problem = h('p', { class: 'row-warning holding-problem', role: 'alert', hidden: true });
+  const note = h('p', { class: 'row-warning holding-note', role: 'status', hidden: true });
 
   const addRow = () => {
     const row = holdingRow();
@@ -739,14 +786,42 @@ function holdingsForm() {
     row.querySelector('input').focus();
   };
 
+  const show = (text) => {
+    note.textContent = text;
+    note.hidden = false;
+  };
+
+  const importImages = async (event) => {
+    const files = [...event.target.files];
+    event.target.value = '';
+    if (files.length === 0) return;
+
+    show(t('image.loading'));
+    try {
+      const texts = await readImages(files, (current) => {
+        show(t('image.reading', { current, total: files.length }));
+      });
+      const stocks = [...new Map(
+        texts.flatMap(readPortfolio).map((stock) => [stock.ticker, stock]),
+      ).values()];
+      show(stocks.length > 0
+        ? imageSummary(list, stocks, fillHoldings(list, stocks))
+        : t('image.none'));
+    } catch (error) {
+      show(`${t('image.failed')} ${describeError(error)}`);
+    }
+  };
+
   const submit = (event) => {
     event.preventDefault();
     const entries = [...list.children].map(holdingEntry);
     const { rows, errors } = readHoldings(entries);
     // Shown in place, because rendering again would throw away what was typed.
-    problem.textContent = t('holdings.failed', { errors: listErrors(errors) });
-    problem.hidden = errors.length === 0;
-    if (errors.length > 0) return;
+    if (errors.length > 0) {
+      show(t('holdings.failed', { errors: listErrors(errors) }));
+      return;
+    }
+    note.hidden = true;
 
     const listed = new Set(rows.map((row) => row.ticker));
     const sold = state.summary.stocks
@@ -768,7 +843,15 @@ function holdingsForm() {
 
   return section(t('holdings.title'), h('form', { class: 'card', onSubmit: submit },
     list,
-    problem,
+    note,
+    h('label', { class: 'row row-button action' }, t('image.import'), h('input', {
+      class: 'file-input',
+      type: 'file',
+      accept: 'image/*',
+      multiple: true,
+      'aria-label': t('image.import'),
+      onChange: importImages,
+    })),
     h('button', { class: 'row row-button action', type: 'button', onClick: addRow }, t('holdings.add')),
     h('button', { class: 'row row-button action', type: 'submit' }, t('holdings.save'))),
   `${updated}${t('holdings.footer')}`);

@@ -35,6 +35,12 @@ npm test
   received minus everything paid, dated to the final sale.
 - Deposits, withdrawals and currency exchanges never count as profit.
 
+## Reading screenshots
+
+Holdings can be filled in from screenshots of the broker's portfolio screen. The
+text is read in the browser by Tesseract in `vendor/tesseract`, so images are
+never uploaded, and nothing is saved until the form is checked and submitted.
+
 ## Database
 
 Schema and access rules are in `supabase/migrations`.

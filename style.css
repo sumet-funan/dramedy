@@ -1263,7 +1263,7 @@ label.row:focus-within {
   outline-offset: 1px;
 }
 
-.holding-problem {
+.holding-note {
   padding: 10px 16px;
   border-top: 0.5px solid var(--separator);
 }

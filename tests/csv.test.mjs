@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { normalizeRow, parseCsv, readHoldings, toCsv } from '../js/csv.js';
+import {
+  normalizeRow, parseCsv, readHoldings, readPortfolio, toCsv,
+} from '../js/csv.js';
 import { setLanguage } from '../js/i18n.js';
 
 setLanguage('en');
@@ -119,6 +121,36 @@ test('flags an empty form, bad tickers, missing shares and duplicates', () => {
     readHoldings([entry('AAA', '1', '1'), entry('aaa', '1', '1')]).errors,
     ['AAA is listed twice'],
   );
+});
+
+const screen = (line, result) => `${line}\n12.00% 1,000.00 THB (${result} USD)`;
+
+test('reads a stock from the portfolio screen', () => {
+  assert.deepEqual(readPortfolio(screen('Q AAA 300.00 N -25.00%', '-100.00')), [{
+    ticker: 'AAA', unrealized: -100, total: 400, agrees: true,
+  }]);
+});
+
+test('reads gains and thousands separators', () => {
+  const [stock] = readPortfolio(screen('BB.A 1,500.00 +50.00%', '+500.00'));
+  assert.deepEqual(stock, {
+    ticker: 'BB.A', unrealized: 500, total: 1000, agrees: true,
+  });
+});
+
+test('flags a misread figure or a lost minus sign', () => {
+  assert.equal(readPortfolio(screen('AAA 300.00 N -25.00%', '-180.00'))[0].agrees, false);
+  assert.equal(readPortfolio(screen('AAA 300.00 N 25.00%', '100.00'))[0].agrees, false);
+});
+
+test('skips the page header and a stock cut off by the screen edge', () => {
+  const text = [
+    '1,521.10',
+    'AS 12.34% (-500.00 USD)',
+    screen('AAA 300.00 N -25.00%', '-100.00'),
+    'BBB 200.00 N -10.00%',
+  ].join('\n');
+  assert.deepEqual(readPortfolio(text).map((stock) => stock.ticker), ['AAA']);
 });
 
 test('an export can be imported again without changes', () => {

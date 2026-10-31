@@ -97,6 +97,48 @@ export function readHoldings(entries) {
   return { rows, errors };
 }
 
+const PORTFOLIO_STOCK = /([A-Z][A-Z0-9.-]{0,9})\s+([\d,]+\.\d{2})\s+(?:\S+\s+){0,2}?([-+]?[\d,]+\.\d{2})\s*%/;
+const PORTFOLIO_RESULT = /\(\s*([-+]?[\d,]+\.\d{2})\s*USD/;
+
+// The percentage is rounded, so a small position can land slightly off.
+const PERCENT_TOLERANCE = 0.1;
+
+const readAmount = (text) => Number(text.replaceAll(',', ''));
+const roundCents = (value) => Math.round(value * 100) / 100;
+
+// The screen shows value, gain or loss and percentage, so a misread figure or a
+// lost minus sign leaves the three disagreeing.
+function figuresAgree({ value, unrealized, percent }) {
+  const cost = value - unrealized;
+  return cost > 0 && Math.abs((unrealized / cost) * 100 - percent) <= PERCENT_TOLERANCE;
+}
+
+// Reads the broker's portfolio screen, where each stock takes two lines. The
+// screen has no share counts, so the cost comes from value minus gain or loss.
+export function readPortfolio(text) {
+  const stocks = [];
+  let open = null;
+
+  for (const line of text.split(/\r?\n/)) {
+    const stock = line.match(PORTFOLIO_STOCK);
+    const result = line.match(PORTFOLIO_RESULT);
+    if (stock) {
+      open = { ticker: stock[1], value: readAmount(stock[2]), percent: readAmount(stock[3]) };
+    } else if (result && open) {
+      const unrealized = readAmount(result[1]);
+      const figures = { ...open, unrealized };
+      stocks.push({
+        ticker: open.ticker,
+        unrealized,
+        total: roundCents(open.value - unrealized),
+        agrees: figuresAgree(figures),
+      });
+      open = null;
+    }
+  }
+  return stocks;
+}
+
 function parseLine(line) {
   const cells = [];
   let cell = '';
