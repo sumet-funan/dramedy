@@ -219,8 +219,8 @@ function monogram(text) {
   return mark;
 }
 
-function tile(label, value, hint) {
-  return h('div', { class: 'tile' },
+function tile(label, value, hint, variant = '') {
+  return h('div', { class: `tile ${variant}` },
     h('div', { class: 'tile-label' }, label),
     h('div', { class: 'tile-value' }, value),
     hint && h('div', { class: 'tile-hint' }, hint));
@@ -255,6 +255,16 @@ function pricedHint(s) {
     : `${s.pricedCount} of ${s.heldCount} stocks priced`;
 }
 
+function overallHint(s) {
+  if (s.pricedCount < s.heldCount) {
+    return `Total profit + Unrealized. Incomplete: ${pricedHint(s).toLowerCase()}`;
+  }
+  const share = s.moneyAdded > 0
+    ? ` · ${((s.overall / s.moneyAdded) * 100).toFixed(1)}% of money added`
+    : '';
+  return `Total profit + Unrealized${share}`;
+}
+
 function renderOverview() {
   const s = state.summary;
   if (state.transactions.length === 0) return emptyState();
@@ -281,6 +291,7 @@ function renderOverview() {
     icon('chevron')),
 
     h('section', { class: 'tiles' },
+      s.heldCount > 0 && tile('Overall', signedMoney(s.overall), overallHint(s), 'wide'),
       tile('Realized', signedMoney(s.realized), 'Profit taken so far'),
       s.heldCount > 0 && tile(
         'Unrealized',

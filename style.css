@@ -1151,3 +1151,11 @@ label.row:focus-within {
   outline: 2px solid var(--tint);
   outline-offset: -2px;
 }
+
+.tile.wide {
+  grid-column: 1 / -1;
+}
+
+.tile.wide .tile-value {
+  font-size: 28px;
+}

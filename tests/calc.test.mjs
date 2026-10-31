@@ -227,6 +227,29 @@ test('a price of zero counts, but a missing price does not', () => {
   assert.equal(result.unrealized, -10000);
 });
 
+test('overall is total profit plus unrealized, and ties to the account value', () => {
+  const rows = [
+    tx('2026-01-01T10:00:00Z', 'deposit', '', 1000),
+    tx('2026-01-02T10:00:00Z', 'buy', 'AAA', -300.3),
+    tx('2026-01-03T10:00:00Z', 'sell', 'AAA', 100),
+    tx('2026-01-04T10:00:00Z', 'fee_taf', '', -0.05),
+    tx('2026-01-05T10:00:00Z', 'dividend', 'AAA', 2),
+  ];
+  const holding = { ...held(5, 225.5), current_price_usd: 30 };
+  const s = summarize(rows, {}, { AAA: holding });
+  assert.equal(s.overall, s.totalProfit + s.unrealized);
+  assert.equal(s.overall, s.cash + s.marketValue - s.moneyAdded);
+});
+
+test('overall equals total profit when nothing is held', () => {
+  const rows = [
+    tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -100),
+    tx('2026-01-02T10:00:00Z', 'sell', 'AAA', 90),
+  ];
+  const s = summarize(rows, { AAA: 'sold' });
+  assert.equal(s.overall, s.totalProfit);
+});
+
 test('rows are processed by time whatever order they arrive in', () => {
   const rows = [
     tx('2026-02-01T10:00:00Z', 'sell', 'AAA', 150, 10),

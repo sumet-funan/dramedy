@@ -177,6 +177,8 @@ export function summarize(transactions, statuses = {}, holdings = {}) {
   const realized = stocks.reduce((sum, s) => sum + (s.realized ?? 0), 0);
   const held = stocks.filter((s) => s.fromHolding);
   const priced = held.filter((s) => s.marketValue !== null);
+  const unrealized = priced.reduce((sum, s) => sum + s.unrealized, 0);
+  const totalProfit = realized + totals.dividends + totals.tax + totals.fees + totals.refunds;
   return {
     ...totals,
     stocks,
@@ -185,9 +187,10 @@ export function summarize(transactions, statuses = {}, holdings = {}) {
     heldCount: held.length,
     pricedCount: priced.length,
     marketValue: priced.reduce((sum, s) => sum + s.marketValue, 0),
-    unrealized: priced.reduce((sum, s) => sum + s.unrealized, 0),
+    unrealized,
+    overall: totalProfit + unrealized,
     stillInvested: stocks.reduce((sum, s) => sum + s.costLeft, 0),
     needsReview: stocks.filter((s) => s.status === 'review').length,
-    totalProfit: realized + totals.dividends + totals.tax + totals.fees + totals.refunds,
+    totalProfit,
   };
 }
