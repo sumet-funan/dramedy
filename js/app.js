@@ -753,14 +753,15 @@ function readyToSave(list) {
   return !next;
 }
 
+function settleRow(row, field) {
+  row.querySelector('.holding-hint').hidden = true;
+  showChecks(row, unsettled(row, field));
+}
+
 function reviewRow(entry, onRemove, onChecked) {
   const hint = h('p', { class: 'holding-hint', hidden: true });
   const match = h('p', { class: 'holding-match', hidden: true });
-
-  const settle = (field) => {
-    hint.hidden = true;
-    showChecks(row, unsettled(row, field));
-  };
+  const settle = (field) => settleRow(row, field);
 
   const refresh = () => {
     const type = fieldOf(row, 'type').value;
@@ -805,9 +806,10 @@ function reviewRow(entry, onRemove, onChecked) {
     }, icon('close'))),
   hint,
   checkedButton(() => {
+    const ticker = checksOf(row).includes('ticker') ? tickerOf(row) : '';
     row.dataset.checks = '';
     settle('');
-    onChecked();
+    onChecked(ticker);
   }),
   match,
   h('div', { class: 'holding-fields review' },
@@ -907,7 +909,17 @@ function tradeReview() {
     showProgress();
   };
 
-  const list = h('ul', {}, state.tradeDraft.map((entry) => reviewRow(entry, removeRow, update)));
+  // Checking a ticker once vouches for it on every row that reads the same.
+  const confirmTicker = (ticker) => {
+    [...list.children]
+      .filter((row) => ticker && tickerOf(row) === ticker)
+      .forEach((row) => settleRow(row, 'ticker'));
+    update();
+  };
+
+  const list = h('ul', {}, state.tradeDraft.map((entry) => (
+    reviewRow(entry, removeRow, confirmTicker)
+  )));
   const save = h('button', { class: 'capsule wide', type: 'submit' });
 
   const showProgress = () => {
