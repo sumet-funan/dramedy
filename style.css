@@ -1287,3 +1287,21 @@ label.row:focus-within {
   padding: 10px 16px;
   border-top: 0.5px solid var(--separator);
 }
+
+/* Trade rows read from images */
+.holding-fields.review {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.holding-fields.review .holding-field:first-child {
+  grid-column: 1 / -1;
+}
+
+.holding-head .pill-select {
+  flex: none;
+  margin-top: 0;
+}
+
+.holding-head .holding-remove {
+  margin-left: auto;
+}

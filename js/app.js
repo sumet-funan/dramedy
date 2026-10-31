@@ -8,8 +8,9 @@ import {
   LANGUAGES, applyLanguage, currentLanguage, plural, setLanguage, t,
 } from './i18n.js';
 import { icon } from './icons.js';
-import { readImages } from './ocr.js';
+import { readImages, readTradeImages } from './ocr.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
+import { readTradeRows } from './trade-screen.js';
 
 const TRADE_TYPES = [
   'buy', 'sell', 'dividend', 'withholding', 'fee_sec', 'fee_taf', 'fee_cat',
@@ -54,6 +55,8 @@ const state = {
   addMode: 'trade',
   holdingDraft: [],
   holdingNote: '',
+  tradeDraft: [],
+  tradeNote: '',
   tradeSearch: '',
   tradeType: '',
   openTrade: null,
@@ -614,7 +617,207 @@ function renderAdd() {
     segmented(t('add.label'), ADD_MODES, state.addMode, (mode) => t(`add.${mode}`), (mode) => {
       state.addMode = mode;
     }),
-    state.addMode === 'trade' ? tradeForm() : holdingsForm());
+    state.addMode === 'holdings' && holdingsForm(),
+    state.addMode === 'trade' && state.tradeDraft.length > 0 && tradeReview(),
+    state.addMode === 'trade' && state.tradeDraft.length === 0 && tradeImport(),
+    state.addMode === 'trade' && state.tradeDraft.length === 0 && tradeForm());
+}
+
+function tradeImport() {
+  const note = h('p', {
+    class: 'row-warning holding-note',
+    role: 'status',
+    hidden: !state.tradeNote,
+  }, state.tradeNote);
+
+  const show = (text) => {
+    state.tradeNote = text;
+    note.textContent = text;
+    note.hidden = !text;
+  };
+
+  const importImages = async (event) => {
+    const files = [...event.target.files];
+    event.target.value = '';
+    if (files.length === 0) return;
+
+    show(t('image.loading'));
+    try {
+      const images = await readTradeImages(files, (current) => {
+        show(t('image.reading', { current, total: files.length }));
+      });
+      const known = state.summary.stocks.map((stock) => stock.ticker);
+      const rows = readTradeRows(images, known);
+      if (rows.length === 0) {
+        show(t('tradeImage.none'));
+        return;
+      }
+
+      const doubtful = rows.filter((row) => row.checkDate || row.checkTicker).length;
+      state.tradeDraft = rows;
+      state.tradeNote = [
+        plural('tradeImage.read', rows.length),
+        doubtful > 0 && t('tradeImage.doubtful', { count: doubtful }),
+      ].filter(Boolean).join(' ');
+      render();
+    } catch (error) {
+      show(`${t('image.failed')} ${describeError(error)}`);
+    }
+  };
+
+  return h('div', { class: 'card' },
+    note,
+    h('label', { class: 'row row-button action' }, t('image.import'), h('input', {
+      class: 'file-input',
+      type: 'file',
+      accept: 'image/*',
+      multiple: true,
+      'aria-label': t('image.import'),
+      onChange: importImages,
+    })));
+}
+
+function reviewRow(entry, onRemove) {
+  const hint = h('p', { class: 'holding-hint', hidden: true });
+
+  const refresh = () => {
+    const type = fieldOf(row, 'type').value;
+    fieldOf(row, 'ticker').hidden = !needsTicker(type);
+    fieldOf(row, 'shares').closest('label').hidden = !['buy', 'sell'].includes(type);
+  };
+
+  const row = h('li', {
+    class: 'holding',
+    onInput: () => {
+      row.classList.remove('bad');
+      hint.hidden = true;
+    },
+    onChange: refresh,
+  },
+  h('div', { class: 'holding-head' },
+    h('select', { class: 'pill-select', name: 'type', 'aria-label': t('form.type') },
+      TRADE_TYPES.map((value) => h('option', {
+        value,
+        selected: value === entry.type,
+      }, typeLabel(value)))),
+    h('input', {
+      class: 'holding-ticker',
+      name: 'ticker',
+      value: entry.ticker ?? '',
+      placeholder: t('form.ticker'),
+      'aria-label': t('form.ticker'),
+      autocapitalize: 'characters',
+      autocomplete: 'off',
+      maxlength: 10,
+    }),
+    h('button', {
+      class: 'holding-remove',
+      type: 'button',
+      'aria-label': t('holdings.remove'),
+      onClick: () => onRemove(row),
+    }, icon('close'))),
+  hint,
+  h('div', { class: 'holding-fields review' },
+    holdingField('date', t('form.date'), {
+      type: 'datetime-local', step: '1', required: true, value: entry.date ?? '',
+    }),
+    holdingField('amount', t('form.amount'), {
+      min: '0.01', step: '0.01', inputmode: 'decimal', required: true, value: entry.amount ?? '',
+    }),
+    holdingField('shares', t('form.shares'), {
+      min: '0', inputmode: 'decimal', placeholder: t('form.optional'), value: entry.shares ?? '',
+    })));
+
+  const warning = entry.warning ?? [
+    entry.checkDate && t('tradeImage.checkDate'),
+    entry.checkTicker && t('tradeImage.checkTicker'),
+  ].filter(Boolean).join(' · ');
+  if (warning) {
+    row.classList.add('bad');
+    hint.textContent = warning;
+    hint.hidden = false;
+  }
+  refresh();
+  return row;
+}
+
+const reviewEntry = (row) => ({
+  ...Object.fromEntries(
+    [...row.querySelectorAll('input, select')].map((field) => [field.name, field.value.trim()]),
+  ),
+  warning: row.classList.contains('bad') ? row.querySelector('.holding-hint').textContent : '',
+});
+
+function tradeReview() {
+  const finish = () => {
+    state.tradeDraft = [];
+    state.tradeNote = '';
+  };
+
+  const saveDraft = () => {
+    state.tradeDraft = [...list.children].map(reviewEntry);
+  };
+
+  const note = h('p', { class: 'row-warning holding-note', role: 'status' }, state.tradeNote);
+
+  const removeRow = (row) => {
+    row.remove();
+    saveDraft();
+    if (state.tradeDraft.length === 0) {
+      finish();
+      render();
+    }
+  };
+
+  const list = h('ul', {}, state.tradeDraft.map((entry) => reviewRow(entry, removeRow)));
+
+  const cancel = () => {
+    if (confirm(t('tradeImage.confirmCancel'))) {
+      finish();
+      render();
+    }
+  };
+
+  const submit = (event) => {
+    event.preventDefault();
+    const items = [...list.children];
+    const results = items.map(reviewEntry).map((entry) => {
+      const amount = Math.abs(Number(entry.amount));
+      return normalizeRow({
+        type: entry.type,
+        occurred_at: `${entry.date}+07:00`,
+        ticker: entry.ticker,
+        amount_usd: isPositiveType(entry.type) ? amount : -amount,
+        shares: entry.shares,
+        note: '',
+      });
+    });
+
+    const problems = results
+      .map(({ error }, index) => ({ error, index }))
+      .filter(({ error }) => error);
+    if (problems.length > 0) {
+      for (const { error, index } of problems) {
+        items[index].classList.add('bad');
+        const hint = items[index].querySelector('.holding-hint');
+        hint.textContent = error;
+        hint.hidden = false;
+      }
+      items[problems[0].index].scrollIntoView({ block: 'center' });
+      return;
+    }
+
+    const rows = results.map(({ row }) => row);
+    run(() => state.store.importRows(rows), (added) => {
+      finish();
+      return t('data.imported', { added, skipped: rows.length - added });
+    });
+  };
+
+  return h('form', { class: 'stack', onSubmit: submit, onInput: saveDraft, onChange: saveDraft },
+    section(null, h('div', { class: 'card' }, note, list), t('tradeImage.footer')),
+    h('button', { class: 'capsule wide', type: 'submit' }, t('tradeImage.save')),
+    h('button', { class: 'text-button', type: 'button', onClick: cancel }, t('tradeImage.cancel')));
 }
 
 function tradeForm() {
