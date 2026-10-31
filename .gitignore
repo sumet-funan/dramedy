@@ -1,0 +1,8 @@
+# Private data must never be committed: this repo is public.
+*.jpg
+*.jpeg
+*.png
+*.csv
+private/
+.env*
+node_modules/
