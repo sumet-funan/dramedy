@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { normalizeRow, parseCsv, parseHoldings, toCsv } from '../js/csv.js';
+import { normalizeRow, parseCsv, readHoldings, toCsv } from '../js/csv.js';
 import { setLanguage } from '../js/i18n.js';
 
 setLanguage('en');
@@ -56,16 +56,12 @@ test('strips a byte order mark and handles Windows line endings', () => {
   assert.equal(rows.length, 1);
 });
 
-const holding = (ticker, shares, average, total) => [
-  `หุ้น: ${ticker}`,
-  `จำนวนหุ้นคงเหลือ: ${shares}`,
-  `ต้นทุนต่อหุ้น(USD): ${average}`,
-  `ต้นทุนรวม(USD): ${total}`,
-].join('\n');
+const entry = (ticker, shares, total, unrealized = '', changed = true) => ({
+  ticker, shares, total, unrealized, changed,
+});
 
-test('reads the Thai holdings list', () => {
-  const text = `${holding('aaa', 10, 2.5, 25)}\r\n\r\n${holding('BBB', 0.5, 40, '20.00')}\n`;
-  assert.deepEqual(parseHoldings(text), {
+test('reads the holdings form', () => {
+  assert.deepEqual(readHoldings([entry('aaa', '10', '25'), entry('BBB', '0.5', '20')]), {
     rows: [
       { ticker: 'AAA', shares: 10, total_cost_usd: 25 },
       { ticker: 'BBB', shares: 0.5, total_cost_usd: 20 },
@@ -74,57 +70,53 @@ test('reads the Thai holdings list', () => {
   });
 });
 
-test('handles thousands separators and rounded averages', () => {
-  const { rows, errors } = parseHoldings(holding('AAA', '1,000', 1.2345, '1,234.50'));
-  assert.deepEqual(errors, []);
-  assert.deepEqual(rows, [{ ticker: 'AAA', shares: 1000, total_cost_usd: 1234.5 }]);
-});
-
-const withResult = (block, value) => `${block}\nมูลค่า(USD): ${value}`;
-
-test('works out the price from the profit or loss line', () => {
-  const { rows, errors } = parseHoldings(withResult(holding('AAA', 10, 2.5, 25), -5));
+test('works out the price from the profit or loss', () => {
+  const { rows, errors } = readHoldings([entry('AAA', '10', '25', '-5')]);
   assert.deepEqual(errors, []);
   assert.deepEqual(rows, [{
     ticker: 'AAA', shares: 10, total_cost_usd: 25, current_price_usd: 2,
   }]);
 });
 
-test('reads gains, thousands separators and the typographic minus', () => {
-  const read = (value) => parseHoldings(withResult(holding('AAA', 10, 200, 2000), value))
-    .rows[0].current_price_usd;
-  assert.equal(read('1,000'), 300);
-  assert.equal(read('+500'), 250);
-  assert.equal(read('−500'), 150);
-});
-
 test('an implied price gives back the exact value for fractional shares', () => {
-  const [row] = parseHoldings(withResult(holding('AAA', 0.3, 100, 30), -7.77)).rows;
+  const [row] = readHoldings([entry('AAA', '0.3', '30', '-7.77')]).rows;
   assert.equal(Math.round(row.shares * row.current_price_usd * 100), 2223);
 });
 
-test('a list without the line leaves the price out', () => {
-  const [row] = parseHoldings(holding('AAA', 10, 2.5, 25)).rows;
+test('a row left as it was keeps its saved price', () => {
+  const [row] = readHoldings([entry('AAA', '10', '25', '-5', false)]).rows;
   assert.equal('current_price_usd' in row, false);
+});
+
+test('a blank result leaves the price out', () => {
+  const [row] = readHoldings([entry('AAA', '10', '25')]).rows;
+  assert.equal('current_price_usd' in row, false);
+});
+
+test('skips blank rows', () => {
+  const { rows, errors } = readHoldings([entry('', '', ''), entry('AAA', '1', '1')]);
+  assert.deepEqual(errors, []);
+  assert.equal(rows.length, 1);
+});
+
+test('a total cost of zero counts, but a blank one does not', () => {
+  assert.deepEqual(readHoldings([entry('AAA', '1', '0')]).errors, []);
+  assert.deepEqual(readHoldings([entry('AAA', '1', '')]).errors, ['AAA has no total cost']);
 });
 
 test('rejects a loss larger than the cost', () => {
   assert.deepEqual(
-    parseHoldings(withResult(holding('AAA', 10, 2.5, 25), -30)).errors,
+    readHoldings([entry('AAA', '10', '25', '-30')]).errors,
     ['AAA: the loss is larger than the total cost'],
   );
 });
 
-test('flags holdings that do not add up', () => {
-  const { errors } = parseHoldings(holding('AAA', 10, 2.5, 99));
-  assert.deepEqual(errors, ['AAA: shares × cost per share doesn’t match the total cost']);
-});
-
-test('flags missing lines, duplicates and unrelated text', () => {
-  assert.deepEqual(parseHoldings('hello').errors, ['No holdings found in the pasted text']);
-  assert.deepEqual(parseHoldings('หุ้น: AAA').errors, ['AAA has no share count']);
+test('flags an empty form, bad tickers, missing shares and duplicates', () => {
+  assert.deepEqual(readHoldings([]).errors, ['Add at least one stock']);
+  assert.deepEqual(readHoldings([entry('', '1', '1')]).errors, ['A row needs a valid ticker']);
+  assert.deepEqual(readHoldings([entry('AAA', '', '1')]).errors, ['AAA has no share count']);
   assert.deepEqual(
-    parseHoldings(`${holding('AAA', 1, 1, 1)}\n${holding('AAA', 1, 1, 1)}`).errors,
+    readHoldings([entry('AAA', '1', '1'), entry('aaa', '1', '1')]).errors,
     ['AAA is listed twice'],
   );
 });

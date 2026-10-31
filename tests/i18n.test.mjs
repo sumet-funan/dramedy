@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { parseCsv, parseHoldings } from '../js/csv.js';
+import { parseCsv, readHoldings } from '../js/csv.js';
 import { messages, plural, setLanguage, t } from '../js/i18n.js';
 
 const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
@@ -45,7 +45,7 @@ test('text follows the chosen language and fills in values', () => {
 test('import errors follow the chosen language', () => {
   setLanguage('th');
   assert.deepEqual(parseCsv('').errors, ['ไฟล์ว่างเปล่า']);
-  assert.deepEqual(parseHoldings('hello').errors, ['ไม่พบรายการหุ้นในข้อความที่วาง']);
+  assert.deepEqual(readHoldings([]).errors, ['เพิ่มหุ้นอย่างน้อย 1 ตัว']);
   assert.deepEqual(
     parseCsv('occurred_at,type,ticker,amount_usd\n2026-01-01T00:00:00Z,buy,AAA,1').errors,
     ['บรรทัด 2: จำนวนเงินของรายการ ซื้อ มีเครื่องหมายบวกลบผิด'],

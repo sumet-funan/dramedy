@@ -1,7 +1,7 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
-import { monthOf, summarize } from './calc.js';
+import { monthOf, summarize, toCents } from './calc.js';
 import {
-  isPositiveType, needsTicker, normalizeRow, parseCsv, parseHoldings, toCsv,
+  isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
 import {
@@ -668,44 +668,92 @@ function pricesForm() {
   t('prices.footer'));
 }
 
-// A dropped minus sign in the list still parses, so the total goes in front of
-// the viewer to compare with the broker's own figure before anything is saved.
-function unrealizedCheck(rows) {
-  const priced = rows.filter((row) => row.current_price_usd !== undefined);
-  if (priced.length === 0) return '';
+// A dropped minus sign still saves, so the total goes in front of the viewer to
+// compare with the broker's own figure before anything is saved.
+function unrealizedCheck(entries) {
+  const filled = entries.filter((entry) => entry.unrealized !== '');
+  if (filled.length === 0) return '';
 
-  const cents = priced.reduce(
-    (sum, row) => sum + Math.round(row.shares * row.current_price_usd * 100)
-      - Math.round(row.total_cost_usd * 100),
-    0,
-  );
+  const cents = filled.reduce((sum, entry) => sum + toCents(entry.unrealized), 0);
   return `\n\n${t('holdings.check', { amount: signedMoney(cents) })}`;
 }
 
+function holdingField(name, label, value, props = {}) {
+  return h('label', { class: 'holding-field' },
+    h('span', {}, label),
+    h('input', {
+      name, type: 'number', step: 'any', value, ...props,
+    }));
+}
+
+function holdingRow(stock) {
+  const ticker = stock?.ticker ?? '';
+  const unrealized = stock?.unrealized ?? null;
+
+  const row = h('li', { class: 'holding' },
+    h('div', { class: 'holding-head' },
+      h('input', {
+        class: 'holding-ticker',
+        name: 'ticker',
+        value: ticker,
+        placeholder: t('form.ticker'),
+        'aria-label': t('form.ticker'),
+        autocapitalize: 'characters',
+        autocomplete: 'off',
+        maxlength: 10,
+      }),
+      h('button', {
+        class: 'holding-remove',
+        type: 'button',
+        'aria-label': t('holdings.remove', { ticker }),
+        onClick: () => row.remove(),
+      }, icon('close'))),
+    h('div', { class: 'holding-fields' },
+      holdingField('shares', t('form.shares'), stock?.sharesHeld ?? '', {
+        min: '0', inputmode: 'decimal',
+      }),
+      holdingField('total', t('holdings.total'), stock ? stock.costLeft / 100 : '', {
+        min: '0', inputmode: 'decimal',
+      }),
+      // No inputmode here, because the decimal keypad on iPhones has no minus key.
+      holdingField('unrealized', t('holdings.unrealized'), unrealized === null ? '' : unrealized / 100)));
+  return row;
+}
+
+function holdingEntry(row) {
+  const inputs = [...row.querySelectorAll('input')];
+  return {
+    ...Object.fromEntries(inputs.map((input) => [input.name, input.value.trim()])),
+    changed: inputs.some((input) => input.value !== input.defaultValue),
+  };
+}
+
 function holdingsForm() {
-  const box = h('textarea', {
-    class: 'paste-box',
-    name: 'holdings',
-    rows: 6,
-    'aria-label': t('holdings.box'),
-    placeholder: 'หุ้น: AAPL\nจำนวนหุ้นคงเหลือ: 10\nต้นทุนต่อหุ้น(USD): 150\nต้นทุนรวม(USD): 1500\nมูลค่า(USD): -50',
-  });
+  const held = state.summary.stocks.filter((stock) => stock.fromHolding);
+  const list = h('ul', {}, held.length > 0 ? held.map((stock) => holdingRow(stock)) : holdingRow());
+  const problem = h('p', { class: 'row-warning holding-problem', role: 'alert', hidden: true });
+
+  const addRow = () => {
+    const row = holdingRow();
+    list.append(row);
+    row.querySelector('input').focus();
+  };
 
   const submit = (event) => {
     event.preventDefault();
-    const { rows, errors } = parseHoldings(box.value);
-    if (errors.length > 0) {
-      setNotice('bad', t('holdings.failed', { errors: listErrors(errors) }));
-      render();
-      return;
-    }
+    const entries = [...list.children].map(holdingEntry);
+    const { rows, errors } = readHoldings(entries);
+    // Shown in place, because rendering again would throw away what was typed.
+    problem.textContent = t('holdings.failed', { errors: listErrors(errors) });
+    problem.hidden = errors.length === 0;
+    if (errors.length > 0) return;
 
     const listed = new Set(rows.map((row) => row.ticker));
     const sold = state.summary.stocks
       .filter((stock) => stock.tradeCount > 0 && !listed.has(stock.ticker))
       .map((stock) => stock.ticker);
     const question = t('holdings.confirm', { count: rows.length, sold: sold.length });
-    if (confirm(`${question}${unrealizedCheck(rows)}`)) {
+    if (confirm(`${question}${unrealizedCheck(entries)}`)) {
       run(
         () => state.store.replaceHoldings(rows, sold),
         t('holdings.saved', { count: rows.length }),
@@ -713,13 +761,15 @@ function holdingsForm() {
     }
   };
 
-  const dates = state.summary.stocks.map((stock) => stock.updatedAt).filter(Boolean).sort();
+  const dates = held.map((stock) => stock.updatedAt).filter(Boolean).sort();
   const updated = dates.length > 0
     ? t('holdings.updated', { date: formats.date.format(new Date(dates.at(-1))) })
     : '';
 
   return section(t('holdings.title'), h('form', { class: 'card', onSubmit: submit },
-    box,
+    list,
+    problem,
+    h('button', { class: 'row row-button action', type: 'button', onClick: addRow }, t('holdings.add')),
     h('button', { class: 'row row-button action', type: 'submit' }, t('holdings.save'))),
   `${updated}${t('holdings.footer')}`);
 }

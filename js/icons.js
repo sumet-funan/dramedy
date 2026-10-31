@@ -15,6 +15,7 @@ const PATHS = {
   export: 'M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14',
   alert: 'M12 4L2.8 20h18.4zM12 10v4.5M12 17.5h.01',
   check: 'M5 12.5l4.5 4.5L19 7.5',
+  close: 'M6 6l12 12M18 6L6 18',
 };
 
 export function icon(name) {

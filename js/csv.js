@@ -9,6 +9,7 @@ const NEGATIVE_TYPES = new Set([
   'buy', 'withholding', 'fee_sec', 'fee_taf', 'fee_cat', 'withdrawal', 'fx_out',
 ]);
 const TICKER_TYPES = new Set(['buy', 'sell', 'dividend', 'withholding']);
+const TICKER_PATTERN = /^[A-Z0-9.-]{1,10}$/;
 
 export const needsTicker = (type) => TICKER_TYPES.has(type);
 export const isPositiveType = (type) => POSITIVE_TYPES.has(type);
@@ -24,7 +25,7 @@ export function normalizeRow(input) {
   if (Number.isNaN(time)) return { error: t('csv.invalidDate', { value: input.occurred_at }) };
 
   const ticker = String(input.ticker ?? '').trim().toUpperCase();
-  if (TICKER_TYPES.has(type) && !/^[A-Z0-9.-]{1,10}$/.test(ticker)) {
+  if (TICKER_TYPES.has(type) && !TICKER_PATTERN.test(ticker)) {
     return { error: t('csv.needsTicker', { type: t(`type.${type}`) }) };
   }
 
@@ -55,62 +56,45 @@ export function normalizeRow(input) {
   };
 }
 
-const HOLDING_PATTERNS = {
-  ticker: /^\s*หุ้น\s*:\s*([A-Za-z0-9.-]+)\s*$/,
-  shares: /^\s*จำนวนหุ้นคงเหลือ\s*:\s*([\d,.]+)\s*$/,
-  average: /^\s*ต้นทุนต่อหุ้น\s*\(USD\)\s*:\s*([\d,.]+)\s*$/,
-  total: /^\s*ต้นทุนรวม\s*\(USD\)\s*:\s*([\d,.]+)\s*$/,
-  unrealized: /^\s*มูลค่า\s*\(USD\)\s*:\s*([-−+]?[\d,.]+)\s*$/,
-};
-
-// The largest gap between shares × average and the total that rounding can explain.
-const HOLDING_TOLERANCE_USD = 0.05;
-
-const readNumber = (text) => Number(text.replaceAll(',', '').replace('−', '-'));
-
 // Despite its name, the broker's "มูลค่า" line is profit or loss on the shares
 // held, not their value. Adding it to the cost gives the value, and so the price.
 const impliedPrice = ({ shares, total, unrealized }) => (
   Math.round(((total + unrealized) / shares) * 1e6) / 1e6
 );
 
-function holdingRow(block) {
-  const row = { ticker: block.ticker, shares: block.shares, total_cost_usd: block.total };
-  return block.unrealized === undefined
-    ? row
-    : { ...row, current_price_usd: impliedPrice(block) };
-}
-
-// Reads the Thai holdings list, one block of four or five lines per stock.
-export function parseHoldings(text) {
-  const blocks = [];
-  for (const line of text.split(/\r?\n/)) {
-    for (const [field, pattern] of Object.entries(HOLDING_PATTERNS)) {
-      const match = line.match(pattern);
-      if (!match) continue;
-      if (field === 'ticker') blocks.push({ ticker: match[1].toUpperCase() });
-      else if (blocks.length > 0) blocks.at(-1)[field] = readNumber(match[1]);
-    }
-  }
-
-  if (blocks.length === 0) return { rows: [], errors: [t('paste.none')] };
+// Reads the holdings form. Only a row with new figures gets a new price, so the
+// price date stays true for rows left as they were.
+export function readHoldings(entries) {
+  const filled = entries.filter((entry) => (
+    entry.ticker || entry.shares || entry.total || entry.unrealized
+  ));
+  if (filled.length === 0) return { rows: [], errors: [t('holdings.none')] };
 
   const errors = [];
   const seen = new Set();
-  for (const { ticker, shares, average, total, unrealized } of blocks) {
-    if (seen.has(ticker)) errors.push(t('paste.twice', { ticker }));
+  const rows = filled.map((entry) => {
+    const ticker = entry.ticker.toUpperCase();
+    const shares = Number(entry.shares);
+    const total = entry.total === '' ? NaN : Number(entry.total);
+    const unrealized = Number(entry.unrealized);
+    const hasResult = entry.changed && entry.unrealized !== '';
+
+    if (!TICKER_PATTERN.test(ticker)) errors.push(t('holdings.badTicker'));
+    else if (seen.has(ticker)) errors.push(t('holdings.twice', { ticker }));
+    else if (!(shares > 0)) errors.push(t('holdings.noShares', { ticker }));
+    else if (!(total >= 0)) errors.push(t('holdings.noTotal', { ticker }));
+    else if (hasResult && !(total + unrealized >= 0)) {
+      errors.push(t('holdings.lossTooLarge', { ticker }));
+    }
     seen.add(ticker);
 
-    if (!(shares > 0)) errors.push(t('paste.noShares', { ticker }));
-    else if (!(total >= 0)) errors.push(t('paste.noTotal', { ticker }));
-    else if (average > 0 && Math.abs(shares * average - total) > HOLDING_TOLERANCE_USD) {
-      errors.push(t('paste.mismatch', { ticker }));
-    } else if (Number.isNaN(unrealized) || total + unrealized < 0) {
-      errors.push(t('paste.lossTooLarge', { ticker }));
-    }
-  }
+    const row = { ticker, shares, total_cost_usd: total };
+    return hasResult
+      ? { ...row, current_price_usd: impliedPrice({ shares, total, unrealized }) }
+      : row;
+  });
 
-  return { rows: blocks.map(holdingRow), errors };
+  return { rows, errors };
 }
 
 function parseLine(line) {
