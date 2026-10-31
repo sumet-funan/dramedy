@@ -347,14 +347,30 @@ function renderOverview() {
     ));
 }
 
+// Marking a held stock as sold deletes its saved shares, cost and price.
+function confirmSold(stock) {
+  return confirm(t('status.confirmSold', {
+    ticker: stock.ticker,
+    shares: stock.sharesHeld.toLocaleString('en-US'),
+    cost: money(stock.costLeft),
+  }));
+}
+
 function statusPicker(stock) {
   return h('select', {
     class: 'pill-select',
     'aria-label': t('status.label', { ticker: stock.ticker }),
-    onChange: (event) => run(
-      () => state.store.setStatus(stock.ticker, event.target.value),
-      t('status.updated', { ticker: stock.ticker }),
-    ),
+    onChange: (event) => {
+      const status = event.target.value;
+      if (status === 'sold' && stock.fromHolding && !confirmSold(stock)) {
+        event.target.value = stock.status;
+        return;
+      }
+      run(
+        () => state.store.setStatus(stock.ticker, status),
+        t('status.updated', { ticker: stock.ticker }),
+      );
+    },
   },
   stock.status === 'review' && h('option', {
     value: 'review', selected: true, disabled: true, hidden: true,

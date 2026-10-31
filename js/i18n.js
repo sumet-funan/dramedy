@@ -89,6 +89,7 @@ export const messages = {
     'status.review': 'Needs status',
     'status.holding': 'Still holding',
     'status.sold': 'Fully sold',
+    'status.confirmSold': 'Mark {ticker} as fully sold? This deletes its saved {shares} shares and {cost} cost.',
 
     'stock.held': '{shares} shares · {cost} avg cost',
     'stock.noPrice': 'Sync market prices to see unrealized profit',
@@ -296,6 +297,7 @@ export const messages = {
     'status.review': 'รอระบุสถานะ',
     'status.holding': 'ยังถืออยู่',
     'status.sold': 'ขายหมดแล้ว',
+    'status.confirmSold': 'ระบุว่า {ticker} ขายหมดแล้วใช่ไหม ระบบจะลบจำนวน {shares} หุ้น และต้นทุน {cost} ที่บันทึกไว้',
 
     'stock.held': '{shares} หุ้น · ต้นทุนเฉลี่ย {cost}',
     'stock.noPrice': 'อัปเดตราคาจากตลาดเพื่อดูกำไรที่ยังไม่รับรู้',
