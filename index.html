@@ -7,10 +7,22 @@
     <meta name="referrer" content="no-referrer">
     <meta name="robots" content="noindex">
     <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0720">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5effe">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Dramedy">
     <title>Dramedy</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
+    <div class="sky" aria-hidden="true">
+      <span class="stars"></span>
+      <span class="glow glow-one"></span>
+      <span class="glow glow-two"></span>
+      <span class="glow glow-three"></span>
+    </div>
     <div id="app"><p class="loading">Loading…</p></div>
     <noscript>This app needs JavaScript.</noscript>
     <script src="vendor/supabase.js"></script>

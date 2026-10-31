@@ -2,6 +2,7 @@ import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import { monthOf, summarize } from './calc.js';
 import { isPositiveType, needsTicker, normalizeRow, parseCsv, toCsv } from './csv.js';
 import { demoData } from './demo.js';
+import { icon } from './icons.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
 
 const TYPE_LABELS = {
@@ -19,17 +20,28 @@ const TYPE_LABELS = {
   fx_out: 'Exchange out',
 };
 
+const TYPE_GLYPHS = {
+  fee_sec: '%',
+  fee_taf: '%',
+  fee_cat: '%',
+  commission_refund: '↩',
+  deposit: '+',
+  withdrawal: '−',
+  fx_in: '⇄',
+  fx_out: '⇄',
+};
+
 const VIEWS = [
-  { id: 'overview', label: 'Overview', render: renderOverview },
-  { id: 'stocks', label: 'Stocks', render: renderStocks },
-  { id: 'trades', label: 'Trades', render: renderTrades },
-  { id: 'add', label: 'Add', render: renderAdd },
-  { id: 'more', label: 'More', render: renderMore },
+  { id: 'overview', label: 'Overview', title: 'Overview', render: renderOverview },
+  { id: 'stocks', label: 'Stocks', title: 'Stocks', render: renderStocks },
+  { id: 'trades', label: 'Trades', title: 'Trades', render: renderTrades },
+  { id: 'add', label: 'Add', title: 'New Trade', render: renderAdd },
+  { id: 'more', label: 'More', title: 'More', render: renderMore },
 ];
 
 const STOCK_FILTERS = [
   { id: 'all', label: 'All' },
-  { id: 'review', label: 'Needs status' },
+  { id: 'review', label: 'Review' },
   { id: 'holding', label: 'Holding' },
   { id: 'sold', label: 'Sold' },
 ];
@@ -45,10 +57,12 @@ const state = {
   stockFilter: 'all',
   tradeSearch: '',
   tradeType: '',
+  openTrade: null,
   transactions: [],
   statuses: {},
   summary: null,
   notice: null,
+  animate: true,
 };
 
 // Builds elements with textContent only, so imported text can never become markup.
@@ -72,7 +86,7 @@ function h(tag, props = {}, ...children) {
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const money = (cents) => usd.format(cents / 100);
 const signedMoney = (cents) => `${cents > 0 ? '+' : ''}${money(cents)}`;
-const signedAmount = (amount) => signedMoney(Math.round(Number(amount) * 100));
+const toneOf = (cents) => (cents > 0 ? 'gain' : cents < 0 ? 'loss' : '');
 
 const dateFormat = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Bangkok',
@@ -86,7 +100,13 @@ const monthFormat = new Intl.DateTimeFormat('en-GB', {
   month: 'short',
   year: 'numeric',
 });
-const monthLabel = (key) => monthFormat.format(new Date(`${key}-01T00:00:00Z`));
+const longMonthFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'UTC',
+  month: 'long',
+  year: 'numeric',
+});
+const monthDate = (key) => new Date(`${key}-01T00:00:00Z`);
+const monthLabel = (key) => monthFormat.format(monthDate(key));
 
 function bangkokNowForInput() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 16);
@@ -128,33 +148,67 @@ async function run(action, success) {
   render();
 }
 
+function goTo(viewId) {
+  state.view = viewId;
+  state.animate = true;
+  render();
+  window.scrollTo(0, 0);
+}
+
+function updateNavbar() {
+  document.body.classList.toggle('scrolled', window.scrollY > 40);
+}
+
+function tabBar() {
+  return h('nav', { class: 'tabbar', 'aria-label': 'Sections' },
+    VIEWS.map((item) => h('button', {
+      type: 'button',
+      class: 'tab',
+      'aria-current': item.id === state.view ? 'page' : null,
+      onClick: () => goTo(item.id),
+    }, icon(item.id), h('span', {}, item.label))));
+}
+
 function render() {
   const view = VIEWS.find((item) => item.id === state.view);
   const notice = state.notice;
   state.notice = null;
 
-  root.replaceChildren(
-    h('header', { class: 'topbar' },
-      h('h1', {}, 'Dramedy'),
-      isDemo && h('span', { class: 'tag' }, 'Demo data')),
-    h('main', { class: 'content' },
-      notice && h('p', { class: `notice ${notice.kind}`, role: 'status' }, notice.text),
-      view.render()),
-    h('nav', { class: 'tabs', 'aria-label': 'Sections' },
-      VIEWS.map((item) => h('button', {
-        type: 'button',
-        class: 'tab',
-        'aria-current': item.id === state.view ? 'page' : null,
-        onClick: () => {
-          state.view = item.id;
-          render();
-          window.scrollTo(0, 0);
-        },
-      }, item.label))),
-  );
+  const main = h('main', { class: `content${state.animate ? ' enter' : ''}` },
+    h('div', { class: 'title-row' },
+      h('h1', { class: 'large-title' }, view.title),
+      isDemo && h('span', { class: 'badge' }, 'Demo')),
+    view.render());
+  state.animate = false;
+
+  root.replaceChildren(...[
+    h('header', { class: 'navbar' }, h('span', { class: 'navbar-title' }, view.title)),
+    notice && h('p', {
+      class: `toast ${notice.kind}`,
+      role: notice.kind === 'bad' ? 'alert' : 'status',
+    }, icon(notice.kind === 'bad' ? 'alert' : 'check'), h('span', {}, notice.text)),
+    main,
+    tabBar(),
+  ].filter(Boolean));
+  updateNavbar();
 }
 
-function statTile(label, value, hint) {
+function section(title, content, footer) {
+  return h('section', { class: 'section' },
+    title && h('h2', { class: 'section-title' }, title),
+    content,
+    footer && h('p', { class: 'section-footer' }, footer));
+}
+
+function monogram(text) {
+  const label = text.slice(0, 2);
+  const mark = h('span', { class: 'monogram', 'aria-hidden': 'true' }, label);
+  const hash = [...text].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  mark.dataset.tint = String(hash % 5);
+  return mark;
+}
+
+function tile(label, value, hint) {
   return h('div', { class: 'tile' },
     h('div', { class: 'tile-label' }, label),
     h('div', { class: 'tile-value' }, value),
@@ -165,94 +219,103 @@ function statTile(label, value, hint) {
 // the sign never depends on colour, and the rows double as the table view.
 function monthlyChart(monthly) {
   const largest = Math.max(...monthly.map((item) => Math.abs(item.cents)), 1);
-  const list = h('ul', { class: 'bars' });
 
-  for (const item of monthly) {
+  return h('ul', { class: 'card bars' }, monthly.map((item) => {
     const bar = h('span', { class: `bar ${item.cents < 0 ? 'loss' : 'gain'}` });
     bar.style.width = `${(Math.abs(item.cents) / largest) * 50}%`;
-    list.append(h('li', { class: 'bar-row' },
+    return h('li', { class: 'bar-row' },
       h('span', { class: 'bar-month' }, monthLabel(item.month)),
       h('span', { class: 'bar-track' }, bar),
-      h('span', { class: 'bar-value' }, signedMoney(item.cents))));
-  }
-  return list;
+      h('span', { class: 'bar-value' }, signedMoney(item.cents)));
+  }));
+}
+
+function emptyState() {
+  return h('section', { class: 'empty' },
+    h('div', { class: 'orb', 'aria-hidden': 'true' }),
+    h('h2', {}, 'Your story starts here'),
+    h('p', {}, 'Import your trade history to bring this place to life.'),
+    h('button', { class: 'capsule', type: 'button', onClick: () => goTo('more') }, 'Import trades'));
 }
 
 function renderOverview() {
   const s = state.summary;
-  if (state.transactions.length === 0) {
-    return h('section', { class: 'empty' },
-      h('h2', {}, 'No trades yet'),
-      h('p', {}, 'Import your history from a CSV file to get started.'),
-      h('button', { class: 'primary', type: 'button', onClick: () => { state.view = 'more'; render(); } },
-        'Go to import'));
-  }
+  if (state.transactions.length === 0) return emptyState();
 
   return h('div', { class: 'stack' },
     h('section', { class: 'hero' },
-      h('div', { class: 'tile-label' }, 'Total profit'),
+      h('div', { class: 'hero-label' }, icon('overview'), 'Total profit'),
       h('div', { class: 'hero-value' }, signedMoney(s.totalProfit)),
-      h('div', { class: 'tile-hint' }, 'Sold stocks, plus dividends, minus fees')),
+      h('div', { class: 'hero-hint' }, 'Sold stocks, plus dividends, minus fees')),
 
     s.needsReview > 0 && h('button', {
-      class: 'callout',
+      class: 'card row row-button review',
       type: 'button',
       onClick: () => {
-        state.view = 'stocks';
         state.stockFilter = 'review';
-        render();
+        goTo('stocks');
       },
-    }, `${s.needsReview} ${s.needsReview === 1 ? 'stock needs' : 'stocks need'} a status. Only stocks marked fully sold count as profit. Review now →`),
+    },
+    h('span', { class: 'row-icon warn' }, icon('alert')),
+    h('span', { class: 'row-main' },
+      h('span', { class: 'row-title' },
+        `${s.needsReview} ${s.needsReview === 1 ? 'stock needs' : 'stocks need'} a status`),
+      h('span', { class: 'row-subtitle' }, 'Only fully sold stocks count as profit')),
+    icon('chevron')),
 
     h('section', { class: 'tiles' },
-      statTile('Sold stocks', signedMoney(s.realized)),
-      statTile('Still invested', money(s.stillInvested), 'Money not yet returned'),
-      statTile('Cash balance', money(s.cash), 'Calculated from your rows'),
-      statTile('Money added', money(s.moneyAdded), 'Deposits and exchanges'),
-      statTile('Dividends', signedMoney(s.dividends + s.tax), 'After tax'),
-      statTile('Fees', money(Math.abs(s.fees + s.refunds)), 'After refunds')),
+      tile('Sold stocks', signedMoney(s.realized)),
+      tile('Still invested', money(s.stillInvested), 'Not yet returned'),
+      tile('Cash balance', money(s.cash), 'From your rows'),
+      tile('Money added', money(s.moneyAdded), 'Deposits and exchanges'),
+      tile('Dividends', signedMoney(s.dividends + s.tax), 'After tax'),
+      tile('Fees', money(Math.abs(s.fees + s.refunds)), 'After refunds')),
 
-    h('section', { class: 'panel' },
-      h('h2', {}, 'Profit by month'),
+    section(
+      'Profit by month',
       s.monthly.length > 0
         ? monthlyChart(s.monthly)
-        : h('p', { class: 'muted' }, 'Mark a stock as fully sold to see it here.'),
-      s.monthly.length > 0 && h('p', { class: 'muted small' },
-        'Without share counts, a stock’s whole profit appears in the month of its final sale.')));
+        : h('div', { class: 'card card-note' }, 'Mark a stock as fully sold to see it here.'),
+      s.monthly.length > 0
+        && 'Without share counts, a stock’s whole profit appears in the month of its final sale.',
+    ));
 }
 
-function stockMeta(stock) {
-  const parts = [`Bought ${money(stock.bought)}`, `Sold ${money(stock.sold)}`];
-  if (stock.exact) parts.push(`${stock.sharesHeld.toLocaleString('en-US')} shares held`);
-  return parts.join(' · ');
+function statusPicker(stock) {
+  return h('select', {
+    class: 'pill-select',
+    'aria-label': `Status of ${stock.ticker}`,
+    onChange: (event) => run(
+      () => state.store.setStatus(stock.ticker, event.target.value),
+      `${stock.ticker} updated`,
+    ),
+  },
+  stock.status === 'review' && h('option', {
+    value: 'review', selected: true, disabled: true, hidden: true,
+  }, 'Needs status'),
+  h('option', { value: 'holding', selected: stock.status === 'holding' }, 'Still holding'),
+  h('option', { value: 'sold', selected: stock.status === 'sold' }, 'Fully sold'));
 }
 
-function statusControl(stock) {
-  const choice = (status, label) => h('button', {
-    type: 'button',
-    'aria-pressed': stock.status === status ? 'true' : 'false',
-    onClick: () => run(() => state.store.setStatus(stock.ticker, status), `${stock.ticker} updated`),
-  }, label);
-
-  return h('div', { class: 'segmented', role: 'group', 'aria-label': `Status of ${stock.ticker}` },
-    choice('holding', 'Still holding'),
-    choice('sold', 'Fully sold'));
-}
-
-function stockCard(stock) {
+function stockRow(stock) {
   const hasProfit = stock.realized !== null;
-  return h('li', { class: 'stock' },
-    h('div', { class: 'stock-head' },
-      h('strong', { class: 'stock-ticker' }, stock.ticker),
-      h('div', { class: 'stock-amount' },
-        h('strong', {}, hasProfit ? signedMoney(stock.realized) : money(stock.costLeft)),
-        h('span', { class: 'muted small' }, hasProfit ? 'Profit' : 'Still invested'))),
-    h('p', { class: 'muted small' }, `${stockMeta(stock)} · ${stock.tradeCount} trades`),
-    stock.oversold && h('p', { class: 'notice bad' },
-      'More shares were sold than bought. A buy may be missing.'),
-    stock.exact
-      ? h('p', { class: 'muted small' }, 'Status comes from your share counts.')
-      : statusControl(stock));
+  const facts = [`Bought ${money(stock.bought)}`, `Sold ${money(stock.sold)}`];
+  if (stock.exact) facts.push(`${stock.sharesHeld.toLocaleString('en-US')} shares held`);
+
+  return h('li', { class: 'row stock-row' },
+    monogram(stock.ticker),
+    h('div', { class: 'row-main' },
+      h('span', { class: 'row-title' }, stock.ticker),
+      h('span', { class: 'row-subtitle' }, facts.join(' · ')),
+      stock.oversold && h('span', { class: 'row-warning' },
+        icon('alert'), 'More shares sold than bought. A buy may be missing.'),
+      stock.exact
+        ? h('span', { class: 'row-subtitle' }, 'Status comes from your share counts')
+        : statusPicker(stock)),
+    h('div', { class: 'row-end' },
+      h('span', { class: `row-amount ${hasProfit ? toneOf(stock.realized) : ''}` },
+        hasProfit ? signedMoney(stock.realized) : money(stock.costLeft)),
+      h('span', { class: 'row-subtitle' }, hasProfit ? 'Profit' : 'Invested')));
 }
 
 function renderStocks() {
@@ -261,10 +324,9 @@ function renderStocks() {
   );
 
   return h('div', { class: 'stack' },
-    h('div', { class: 'chips', role: 'group', 'aria-label': 'Filter stocks' },
+    h('div', { class: 'segmented', role: 'group', 'aria-label': 'Filter stocks' },
       STOCK_FILTERS.map((filter) => h('button', {
         type: 'button',
-        class: 'chip',
         'aria-pressed': state.stockFilter === filter.id ? 'true' : 'false',
         onClick: () => {
           state.stockFilter = filter.id;
@@ -272,8 +334,8 @@ function renderStocks() {
         },
       }, filter.label))),
     stocks.length > 0
-      ? h('ul', { class: 'list' }, stocks.map(stockCard))
-      : h('p', { class: 'muted' }, 'Nothing in this group.'));
+      ? h('ul', { class: 'card' }, stocks.map(stockRow))
+      : h('div', { class: 'card card-note' }, 'Nothing in this group.'));
 }
 
 function matchesTradeFilters(tx) {
@@ -281,25 +343,40 @@ function matchesTradeFilters(tx) {
   return (!search || tx.ticker.includes(search)) && (!state.tradeType || tx.type === state.tradeType);
 }
 
-function tradeRow(tx) {
+function tradeRow(tx, rerender) {
   const label = [TYPE_LABELS[tx.type], tx.ticker].filter(Boolean).join(' ');
+  const cents = Math.round(Number(tx.amount_usd) * 100);
+  const isOpen = state.openTrade === tx.id;
+
   return h('li', { class: 'trade' },
-    h('div', {},
-      h('div', { class: 'trade-title' }, label),
-      h('div', { class: 'muted small' }, dateFormat.format(new Date(tx.occurred_at))),
-      tx.note && h('div', { class: 'muted small' }, tx.note)),
-    h('div', { class: 'trade-side' },
-      h('div', { class: 'trade-amount' }, signedAmount(tx.amount_usd)),
+    h('button', {
+      class: 'row row-button',
+      type: 'button',
+      'aria-expanded': isOpen ? 'true' : 'false',
+      onClick: () => {
+        state.openTrade = isOpen ? null : tx.id;
+        rerender();
+      },
+    },
+    tx.ticker
+      ? monogram(tx.ticker)
+      : h('span', { class: 'monogram quiet', 'aria-hidden': 'true' }, TYPE_GLYPHS[tx.type] ?? '·'),
+    h('span', { class: 'row-main' },
+      h('span', { class: 'row-title' }, label),
+      h('span', { class: 'row-subtitle' }, dateFormat.format(new Date(tx.occurred_at)))),
+    h('span', { class: `row-amount ${cents > 0 ? 'gain' : ''}` }, signedMoney(cents))),
+    isOpen && h('div', { class: 'trade-detail' },
+      tx.shares && h('p', {}, `${Number(tx.shares).toLocaleString('en-US')} shares`),
+      tx.note && h('p', {}, tx.note),
       h('button', {
-        class: 'link danger',
+        class: 'text-button destructive',
         type: 'button',
-        'aria-label': `Delete ${label}`,
         onClick: () => {
-          if (confirm(`Delete ${label} (${signedAmount(tx.amount_usd)})?`)) {
+          if (confirm(`Delete ${label} (${signedMoney(cents)})?`)) {
             run(() => state.store.remove(tx.id), 'Trade deleted');
           }
         },
-      }, 'Delete')));
+      }, 'Delete trade')));
 }
 
 function renderTradeList(container) {
@@ -311,12 +388,15 @@ function renderTradeList(container) {
   }
 
   if (groups.size === 0) {
-    container.replaceChildren(h('p', { class: 'muted' }, 'No trades match.'));
+    container.replaceChildren(h('div', { class: 'card card-note' }, 'No trades match.'));
     return;
   }
-  container.replaceChildren(...[...groups].map(([month, rows]) => h('section', { class: 'group' },
-    h('h2', {}, monthLabel(month)),
-    h('ul', { class: 'list' }, rows.map(tradeRow)))));
+
+  const rerender = () => renderTradeList(container);
+  container.replaceChildren(...[...groups].map(([month, rows]) => section(
+    longMonthFormat.format(monthDate(month)),
+    h('ul', { class: 'card' }, rows.map((tx) => tradeRow(tx, rerender))),
+  )));
 }
 
 function renderTrades() {
@@ -324,10 +404,13 @@ function renderTrades() {
   renderTradeList(results);
 
   return h('div', { class: 'stack' },
-    h('div', { class: 'filters' },
-      h('label', { class: 'field' }, 'Ticker',
+    h('div', { class: 'search-row' },
+      h('label', { class: 'search' },
+        icon('search'),
         h('input', {
           type: 'search',
+          placeholder: 'Search ticker',
+          'aria-label': 'Search ticker',
           value: state.tradeSearch,
           autocapitalize: 'characters',
           autocomplete: 'off',
@@ -336,18 +419,19 @@ function renderTrades() {
             renderTradeList(results);
           },
         })),
-      h('label', { class: 'field' }, 'Type',
-        h('select', {
-          onChange: (event) => {
-            state.tradeType = event.target.value;
-            renderTradeList(results);
-          },
+      h('select', {
+        class: 'pill-select',
+        'aria-label': 'Filter by type',
+        onChange: (event) => {
+          state.tradeType = event.target.value;
+          renderTradeList(results);
         },
-        h('option', { value: '' }, 'All types'),
-        Object.entries(TYPE_LABELS).map(([value, label]) => h('option', {
-          value,
-          selected: value === state.tradeType,
-        }, label))))),
+      },
+      h('option', { value: '' }, 'All types'),
+      Object.entries(TYPE_LABELS).map(([value, label]) => h('option', {
+        value,
+        selected: value === state.tradeType,
+      }, label)))),
     results);
 }
 
@@ -374,11 +458,21 @@ function submitTrade(event) {
   run(() => state.store.add(row), 'Trade added');
 }
 
+function formRow(label, control) {
+  return h('label', { class: 'form-row' }, h('span', {}, label), control);
+}
+
 function renderAdd() {
-  const ticker = h('label', { class: 'field' }, 'Ticker',
-    h('input', { name: 'ticker', autocapitalize: 'characters', autocomplete: 'off', maxlength: 10 }));
-  const shares = h('label', { class: 'field' }, 'Shares (optional)',
-    h('input', { name: 'shares', type: 'number', step: 'any', min: '0', inputmode: 'decimal' }));
+  const ticker = formRow('Ticker', h('input', {
+    name: 'ticker',
+    placeholder: 'Required',
+    autocapitalize: 'characters',
+    autocomplete: 'off',
+    maxlength: 10,
+  }));
+  const shares = formRow('Shares', h('input', {
+    name: 'shares', type: 'number', step: 'any', min: '0', inputmode: 'decimal', placeholder: 'Optional',
+  }));
 
   const syncFields = (type) => {
     ticker.hidden = !needsTicker(type);
@@ -387,22 +481,30 @@ function renderAdd() {
   };
   syncFields('buy');
 
-  return h('form', { class: 'panel form', onSubmit: submitTrade },
-    h('h2', {}, 'Add a trade'),
-    h('label', { class: 'field' }, 'Type',
-      h('select', { name: 'type', onChange: (event) => syncFields(event.target.value) },
-        Object.entries(TYPE_LABELS).map(([value, label]) => h('option', { value }, label)))),
-    ticker,
-    h('label', { class: 'field' }, 'Amount in USD, including fees',
-      h('input', {
-        name: 'amount', type: 'number', step: '0.01', min: '0.01', inputmode: 'decimal', required: true,
+  return h('form', { class: 'stack', onSubmit: submitTrade },
+    section(null, h('div', { class: 'card' },
+      formRow('Type', h('select', {
+        name: 'type',
+        onChange: (event) => syncFields(event.target.value),
+      }, Object.entries(TYPE_LABELS).map(([value, label]) => h('option', { value }, label)))),
+      ticker,
+      formRow('Amount (USD)', h('input', {
+        name: 'amount',
+        type: 'number',
+        step: '0.01',
+        min: '0.01',
+        inputmode: 'decimal',
+        placeholder: '0.00',
+        required: true,
       })),
-    shares,
-    h('label', { class: 'field' }, 'Date and time (Bangkok)',
-      h('input', { name: 'occurred_at', type: 'datetime-local', value: bangkokNowForInput(), required: true })),
-    h('label', { class: 'field' }, 'Note (optional)',
-      h('input', { name: 'note', maxlength: 500 })),
-    h('button', { class: 'primary', type: 'submit' }, 'Save trade'));
+      shares), 'Enter the total amount, including any fees.'),
+    section(null, h('div', { class: 'card' },
+      formRow('Date', h('input', {
+        name: 'occurred_at', type: 'datetime-local', value: bangkokNowForInput(), required: true,
+      })),
+      formRow('Note', h('input', { name: 'note', maxlength: 500, placeholder: 'Optional' }))),
+    'Times are in Bangkok time.'),
+    h('button', { class: 'capsule wide', type: 'submit' }, 'Save Trade'));
 }
 
 function downloadExport() {
@@ -431,7 +533,7 @@ async function importFile(event) {
 
   await run(
     () => state.store.importRows(rows),
-    (added) => `${added} new rows added. ${rows.length - added} were already here.`,
+    (added) => `Added ${added} new, skipped ${rows.length - added} already here.`,
   );
 }
 
@@ -445,43 +547,65 @@ function passwordForm() {
     render();
   };
 
-  return h('form', { class: 'form', onSubmit: submit },
-    h('label', { class: 'field' }, 'New password (at least 12 characters)',
-      h('input', {
-        name: 'password', type: 'password', autocomplete: 'new-password', minlength: 12, required: true,
-      })),
-    h('button', { class: 'secondary', type: 'submit' }, 'Save password'));
+  return section('Password', h('form', { class: 'card', onSubmit: submit },
+    formRow('New password', h('input', {
+      name: 'password',
+      type: 'password',
+      autocomplete: 'new-password',
+      minlength: 12,
+      required: true,
+      placeholder: '12+ characters',
+    })),
+    h('button', { class: 'row row-button action', type: 'submit' }, 'Save Password')));
 }
 
 function renderMore() {
   return h('div', { class: 'stack' },
-    h('section', { class: 'panel' },
-      h('h2', {}, 'Import'),
-      h('p', { class: 'muted' }, 'Load trades from a CSV file. Rows already here are skipped, so importing twice is safe.'),
-      h('label', { class: 'field' }, 'CSV file',
-        h('input', { type: 'file', accept: '.csv,text/csv', onChange: importFile }))),
-    h('section', { class: 'panel' },
-      h('h2', {}, 'Back up'),
-      h('p', { class: 'muted' }, 'The free database plan has no automatic backups. Export now and then, and keep the file somewhere private.'),
-      h('button', { class: 'secondary', type: 'button', onClick: downloadExport }, 'Export all trades')),
-    !isDemo && h('section', { class: 'panel' },
-      h('h2', {}, 'Account'),
-      h('p', { class: 'muted' }, `Signed in as ${state.email}`),
-      passwordForm(),
+    section('Your data', h('div', { class: 'card' },
+      h('label', { class: 'row row-button' },
+        h('span', { class: 'row-icon' }, icon('import')),
+        h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, 'Import CSV')),
+        icon('chevron'),
+        h('input', {
+          class: 'file-input',
+          type: 'file',
+          accept: '.csv,text/csv',
+          'aria-label': 'Import CSV',
+          onChange: importFile,
+        })),
+      h('button', { class: 'row row-button', type: 'button', onClick: downloadExport },
+        h('span', { class: 'row-icon' }, icon('export')),
+        h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, 'Export All Trades')),
+        icon('chevron'))),
+    'Importing twice is safe because rows already here are skipped. The free database plan has no automatic backups, so export now and then and keep the file private.'),
+    !isDemo && passwordForm(),
+    !isDemo && section('Account', h('div', { class: 'card' },
+      h('div', { class: 'row' },
+        h('span', { class: 'row-main' },
+          h('span', { class: 'row-subtitle' }, 'Signed in as'),
+          h('span', { class: 'row-title' }, state.email))),
       h('button', {
-        class: 'secondary',
+        class: 'row row-button action destructive',
         type: 'button',
         onClick: () => state.client.auth.signOut(),
-      }, 'Sign out')));
+      }, 'Sign Out'))));
 }
 
 function renderLogin(message) {
-  const status = h('p', { class: 'muted', role: 'status' }, message ?? '');
+  const status = h('p', { class: 'login-status', role: 'status' }, message ?? '');
   const email = h('input', {
-    name: 'email', type: 'email', autocomplete: 'username', required: true,
+    name: 'email',
+    type: 'email',
+    autocomplete: 'username',
+    placeholder: 'you@example.com',
+    required: true,
   });
   const password = h('input', {
-    name: 'password', type: 'password', autocomplete: 'current-password', required: true,
+    name: 'password',
+    type: 'password',
+    autocomplete: 'current-password',
+    placeholder: 'Required',
+    required: true,
   });
 
   const submit = async (event) => {
@@ -514,14 +638,15 @@ function renderLogin(message) {
       : 'Check your email for the sign-in link. Open it in this browser.';
   };
 
-  root.replaceChildren(h('main', { class: 'login' },
+  document.body.classList.remove('scrolled');
+  root.replaceChildren(h('main', { class: 'login enter' },
+    h('div', { class: 'orb', 'aria-hidden': 'true' }),
     h('h1', {}, 'Dramedy'),
-    h('p', { class: 'muted' }, 'Your private trade tracker.'),
-    h('form', { class: 'panel form', onSubmit: submit },
-      h('label', { class: 'field' }, 'Email', email),
-      h('label', { class: 'field' }, 'Password', password),
-      h('button', { class: 'primary', type: 'submit' }, 'Sign in'),
-      h('button', { class: 'secondary', type: 'button', onClick: sendLink }, 'Email me a link instead')),
+    h('p', { class: 'login-tagline' }, 'Every trade tells a story.'),
+    h('form', { class: 'login-form', onSubmit: submit },
+      h('div', { class: 'card' }, formRow('Email', email), formRow('Password', password)),
+      h('button', { class: 'capsule wide', type: 'submit' }, 'Sign In'),
+      h('button', { class: 'text-button', type: 'button', onClick: sendLink }, 'Email me a link instead')),
     status));
 }
 
@@ -530,6 +655,7 @@ async function openApp(session) {
   state.store = createSupabaseStore(state.client, session.user.id);
   try {
     await refresh();
+    state.animate = true;
     render();
   } catch (error) {
     renderLogin(describeError(error));
@@ -537,6 +663,8 @@ async function openApp(session) {
 }
 
 async function start() {
+  window.addEventListener('scroll', updateNavbar, { passive: true });
+
   if (isDemo) {
     state.store = createDemoStore(demoData);
     await refresh();
