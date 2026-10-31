@@ -98,6 +98,12 @@ function setNotice(kind, text) {
 
 function describeError(error) {
   const message = String(error?.message ?? error);
+  if (error?.code === 'over_email_send_rate_limit') {
+    return 'Too many sign-in emails. The free plan sends about 2 an hour, so try again later or sign in with your password.';
+  }
+  if (error?.code === 'invalid_credentials') {
+    return 'Wrong email or password. If you haven’t set a password yet, sign in with an email link first.';
+  }
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return 'Can’t reach the database. If the app has been idle for a week, restore the project in the Supabase dashboard.';
   }
@@ -429,6 +435,24 @@ async function importFile(event) {
   );
 }
 
+function passwordForm() {
+  const submit = async (event) => {
+    event.preventDefault();
+    const password = new FormData(event.target).get('password');
+    const { error } = await state.client.auth.updateUser({ password });
+    if (error) setNotice('bad', describeError(error));
+    else setNotice('good', 'Password saved. You can now sign in with it on any device.');
+    render();
+  };
+
+  return h('form', { class: 'form', onSubmit: submit },
+    h('label', { class: 'field' }, 'New password (at least 12 characters)',
+      h('input', {
+        name: 'password', type: 'password', autocomplete: 'new-password', minlength: 12, required: true,
+      })),
+    h('button', { class: 'secondary', type: 'submit' }, 'Save password'));
+}
+
 function renderMore() {
   return h('div', { class: 'stack' },
     h('section', { class: 'panel' },
@@ -443,6 +467,7 @@ function renderMore() {
     !isDemo && h('section', { class: 'panel' },
       h('h2', {}, 'Account'),
       h('p', { class: 'muted' }, `Signed in as ${state.email}`),
+      passwordForm(),
       h('button', {
         class: 'secondary',
         type: 'button',
@@ -452,33 +477,51 @@ function renderMore() {
 
 function renderLogin(message) {
   const status = h('p', { class: 'muted', role: 'status' }, message ?? '');
+  const email = h('input', {
+    name: 'email', type: 'email', autocomplete: 'username', required: true,
+  });
+  const password = h('input', {
+    name: 'password', type: 'password', autocomplete: 'current-password', required: true,
+  });
 
   const submit = async (event) => {
     event.preventDefault();
-    const button = event.target.querySelector('button');
+    const button = event.target.querySelector('button[type=submit]');
     button.disabled = true;
+    status.textContent = 'Signing in…';
+
+    const { error } = await state.client.auth.signInWithPassword({
+      email: email.value,
+      password: password.value,
+    });
+    button.disabled = false;
+    status.textContent = error ? describeError(error) : '';
+  };
+
+  const sendLink = async () => {
+    if (!email.reportValidity()) return;
     status.textContent = 'Sending…';
 
     const { error } = await state.client.auth.signInWithOtp({
-      email: new FormData(event.target).get('email'),
+      email: email.value,
       options: {
         shouldCreateUser: false,
         emailRedirectTo: `${location.origin}${location.pathname}`,
       },
     });
-    button.disabled = false;
     status.textContent = error
-      ? `Couldn’t send the link: ${describeError(error)}`
-      : 'Check your email for the sign-in link.';
+      ? describeError(error)
+      : 'Check your email for the sign-in link. Open it in this browser.';
   };
 
   root.replaceChildren(h('main', { class: 'login' },
     h('h1', {}, 'Dramedy'),
     h('p', { class: 'muted' }, 'Your private trade tracker.'),
     h('form', { class: 'panel form', onSubmit: submit },
-      h('label', { class: 'field' }, 'Email',
-        h('input', { name: 'email', type: 'email', autocomplete: 'email', required: true })),
-      h('button', { class: 'primary', type: 'submit' }, 'Email me a sign-in link')),
+      h('label', { class: 'field' }, 'Email', email),
+      h('label', { class: 'field' }, 'Password', password),
+      h('button', { class: 'primary', type: 'submit' }, 'Sign in'),
+      h('button', { class: 'secondary', type: 'button', onClick: sendLink }, 'Email me a link instead')),
     status));
 }
 
