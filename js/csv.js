@@ -56,29 +56,26 @@ export function normalizeRow(input) {
   };
 }
 
-// Close to this, the saved cost stays, because it's the broker's own figure and the
-// one worked out from the screen comes from rounded ones.
-const COST_TOLERANCE_USD = 0.05;
+// Despite its name, the broker's "มูลค่า" line is profit or loss on the shares
+// held, not their value. Adding it to the cost gives the value, and so the price.
+const impliedPrice = ({ shares, total, unrealized }) => (
+  Math.round(((total + unrealized) / shares) * 1e6) / 1e6
+);
 
-// The screen shows a stock's value and its gain or loss, so the cost is the
-// difference. With only one of them, a stock already held keeps its cost.
-function costFrom(entry, held) {
-  if (entry.value === '' || entry.unrealized === '') return held?.total;
-  const cost = roundCents(Number(entry.value) - Number(entry.unrealized));
-  return held && Math.abs(held.total - cost) <= COST_TOLERANCE_USD ? held.total : cost;
+// A blank total comes from the cost per share, which is rounded, so a total the
+// broker gives is always preferred.
+function costFrom(entry, shares, held) {
+  if (entry.total !== '') return Number(entry.total);
+  if (entry.perShare !== '') return roundCents(shares * Number(entry.perShare));
+  return held?.total;
 }
 
-function worthOf(entry, total) {
-  if (entry.value !== '') return Number(entry.value);
-  return entry.unrealized === '' ? null : total + Number(entry.unrealized);
-}
-
-// Reads the holdings form, which follows the broker's portfolio screen. A stock
-// already held keeps any figure left blank, so a row can update just one of them.
-// Anything new needs its shares, value and gain or loss.
+// Reads the holdings form, which follows the broker's list of what's held. A stock
+// already held keeps any figure left blank, so a row can update just its result.
+// Anything new needs its shares and cost.
 export function readHoldings(entries, saved = {}) {
   const filled = entries.filter((entry) => (
-    entry.ticker || entry.shares || entry.value || entry.percent || entry.unrealized
+    entry.ticker || entry.shares || entry.perShare || entry.total || entry.unrealized
   ));
   if (filled.length === 0) return { rows: [], errors: [t('holdings.none')], problems: [] };
 
@@ -88,40 +85,38 @@ export function readHoldings(entries, saved = {}) {
     const ticker = entry.ticker.toUpperCase();
     const held = saved[ticker];
     const shares = entry.shares === '' ? held?.shares : Number(entry.shares);
-    const total = costFrom(entry, held);
-    const worth = worthOf(entry, total);
+    const total = costFrom(entry, shares, held);
+    const unrealized = Number(entry.unrealized);
+    const hasResult = entry.unrealized !== '';
     const index = entries.indexOf(entry);
     const report = (key, values) => problems.push({ index, message: t(key, values) });
 
     if (!TICKER_PATTERN.test(ticker)) report('holdings.badTicker', { row: index + 1 });
     else if (seen.has(ticker)) report('holdings.twice', { ticker });
-    else if (held && !entry.shares && !entry.value && !entry.unrealized) {
+    else if (held && !entry.shares && !entry.perShare && !entry.total && !hasResult) {
       report('holdings.nothing', { ticker });
     } else if (!(shares > 0)) report('holdings.noShares', { ticker });
-    else if (total === undefined) report('holdings.noFigures', { ticker });
-    else if (total < 0) report('holdings.gainTooLarge', { ticker });
-    else if (worth < 0) report('holdings.lossTooLarge', { ticker });
+    else if (!(total >= 0)) report('holdings.noTotal', { ticker });
+    else if (hasResult && !(total + unrealized >= 0)) {
+      report('holdings.lossTooLarge', { ticker });
+    }
     seen.add(ticker);
 
     const row = { ticker, shares, total_cost_usd: total };
-    return worth === null
-      ? row
-      : { ...row, current_price_usd: Math.round((worth / shares) * 1e6) / 1e6 };
+    return hasResult
+      ? { ...row, current_price_usd: impliedPrice({ shares, total, unrealized }) }
+      : row;
   });
 
   return { rows, errors: problems.map((problem) => problem.message), problems };
 }
 
-// The percentage is rounded, so a small position can land slightly off.
-const PERCENT_TOLERANCE = 0.1;
-
 const roundCents = (value) => Math.round(value * 100) / 100;
 
-// The screen shows value, gain or loss and percentage, so a mistyped figure leaves
-// the three disagreeing.
-export function figuresAgree({ value, unrealized, percent }) {
-  const cost = value - unrealized;
-  return cost > 0 && Math.abs((unrealized / cost) * 100 - percent) <= PERCENT_TOLERANCE;
+// Shares times cost per share gives the total, so a mistyped figure leaves the
+// three disagreeing. The cost per share is rounded, which adds up on a large holding.
+export function costsAgree({ shares, perShare, total }) {
+  return Math.abs(shares * perShare - total) <= Math.max(0.05, shares * 0.0001);
 }
 
 function parseLine(line) {

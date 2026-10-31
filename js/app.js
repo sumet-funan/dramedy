@@ -1,7 +1,7 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import { monthOf, summarize, toCents } from './calc.js';
 import {
-  figuresAgree, isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, toCsv,
+  costsAgree, isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
 import { DUPLICATE_ROW, fillsShares, findDuplicates } from './duplicates.js';
@@ -712,7 +712,7 @@ function tradeImport() {
 const CHECKS = {
   date: { fields: ['date'], text: () => t('tradeImage.checkDate') },
   ticker: { fields: ['ticker'], text: () => t('tradeImage.checkTicker') },
-  figures: { fields: ['value', 'percent', 'unrealized'], text: () => t('holdings.checkFigures') },
+  figures: { fields: ['shares', 'perShare', 'total'], text: () => t('holdings.checkFigures') },
 };
 
 const checksOf = (row) => (row.dataset.checks || '').split(' ').filter(Boolean);
@@ -1073,12 +1073,12 @@ const holdingEntry = (row) => ({
   checks: checksOf(row),
 });
 
-// The three figures of a row on the broker's screen have to fit each other, so a
-// mistyped one shows as soon as it's entered.
+// Shares, cost per share and total cost have to fit each other, so a mistyped one
+// shows as soon as it's entered.
 function figuresOff(row) {
-  const { value, percent, unrealized } = holdingEntry(row);
-  return value !== '' && percent !== '' && unrealized !== '' && !figuresAgree({
-    value: Number(value), percent: Number(percent), unrealized: Number(unrealized),
+  const { shares, perShare, total } = holdingEntry(row);
+  return shares !== '' && perShare !== '' && total !== '' && !costsAgree({
+    shares: Number(shares), perShare: Number(perShare), total: Number(total),
   });
 }
 
@@ -1095,9 +1095,9 @@ function holdingRow(saved, entry, onRemove, onChecked) {
       ? t('holdings.heldHint', { shares: held.shares.toLocaleString('en-US') })
       : t('holdings.newHint');
     fieldOf(row, 'shares').placeholder = held?.shares ?? t('form.required');
-    fieldOf(row, 'value').placeholder = held?.value ?? t('form.required');
-    fieldOf(row, 'percent').placeholder = t('form.optional');
-    fieldOf(row, 'unrealized').placeholder = held?.unrealized ?? t('form.required');
+    fieldOf(row, 'perShare').placeholder = held?.perShare ?? t('form.optional');
+    fieldOf(row, 'total').placeholder = held?.total ?? t('form.required');
+    fieldOf(row, 'unrealized').placeholder = held?.unrealized ?? t('form.optional');
 
     const field = event?.target.name;
     const checks = unsettled(row, field);
@@ -1134,15 +1134,17 @@ function holdingRow(saved, entry, onRemove, onChecked) {
       onChecked();
     }),
     h('div', { class: 'holding-fields' },
-      holdingField('value', t('holdings.value'), {
-        min: '0', inputmode: 'decimal', value: entry.value ?? '',
-      }),
-      // No inputmode on these two, because the decimal keypad on iPhones has no minus key.
-      holdingField('percent', t('holdings.percent'), { value: entry.percent ?? '' }),
-      holdingField('unrealized', t('holdings.unrealized'), { value: entry.unrealized ?? '' }),
-      holdingField('shares', t('form.shares'), {
+      holdingField('shares', t('holdings.shares'), {
         min: '0', inputmode: 'decimal', value: entry.shares ?? '',
-      })));
+      }),
+      holdingField('perShare', t('holdings.perShare'), {
+        min: '0', inputmode: 'decimal', value: entry.perShare ?? '',
+      }),
+      holdingField('total', t('holdings.total'), {
+        min: '0', inputmode: 'decimal', value: entry.total ?? '',
+      }),
+      // No inputmode here, because the decimal keypad on iPhones has no minus key.
+      holdingField('unrealized', t('holdings.amount'), { value: entry.unrealized ?? '' })));
   refresh();
   return row;
 }
@@ -1154,7 +1156,7 @@ function savedHoldings() {
     {
       shares: stock.sharesHeld,
       total: stock.costLeft / 100,
-      value: stock.marketValue === null ? undefined : stock.marketValue / 100,
+      perShare: Math.round((stock.costLeft / stock.sharesHeld) * 100) / 10000,
       unrealized: stock.unrealized === null ? undefined : stock.unrealized / 100,
     },
   ]));

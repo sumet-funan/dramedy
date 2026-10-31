@@ -47,9 +47,9 @@ as checked.
 
 ## Holdings
 
-Holdings are typed in from the broker's portfolio screen, and the form shows the
-same figures as that screen. The cost is worked out when saving, as value minus gain
-or loss.
+Holdings are typed in from the broker's list of each stock: outstanding shares, cost
+per share, total cost and amount. Amount is the broker's "มูลค่า" line, which is the
+gain or loss. A blank total cost is worked out from the shares and cost per share.
 
 ## Duplicates
 
