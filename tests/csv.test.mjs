@@ -58,8 +58,8 @@ test('strips a byte order mark and handles Windows line endings', () => {
   assert.equal(rows.length, 1);
 });
 
-const entry = (ticker, shares, total, unrealized = '', changed = true) => ({
-  ticker, shares, total, unrealized, changed,
+const entry = (ticker, shares, total, unrealized = '') => ({
+  ticker, shares, total, unrealized,
 });
 
 test('reads the holdings form', () => {
@@ -85,14 +85,36 @@ test('an implied price gives back the exact value for fractional shares', () => 
   assert.equal(Math.round(row.shares * row.current_price_usd * 100), 2223);
 });
 
-test('a row left as it was keeps its saved price', () => {
-  const [row] = readHoldings([entry('AAA', '10', '25', '-5', false)]).rows;
-  assert.equal('current_price_usd' in row, false);
-});
-
 test('a blank result leaves the price out', () => {
   const [row] = readHoldings([entry('AAA', '10', '25')]).rows;
   assert.equal('current_price_usd' in row, false);
+});
+
+const saved = { AAA: { shares: 10, total: 25 } };
+
+test('a stock already held keeps the figures left blank', () => {
+  const { rows, errors } = readHoldings([entry('aaa', '', '', '-5')], saved);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(rows, [{
+    ticker: 'AAA', shares: 10, total_cost_usd: 25, current_price_usd: 2,
+  }]);
+});
+
+test('typed figures replace the saved ones', () => {
+  const [row] = readHoldings([entry('AAA', '20', '60')], saved).rows;
+  assert.deepEqual(row, { ticker: 'AAA', shares: 20, total_cost_usd: 60 });
+});
+
+test('a stock already held needs at least one figure', () => {
+  assert.deepEqual(
+    readHoldings([entry('AAA', '', '')], saved).errors,
+    ['AAA: enter at least one figure'],
+  );
+});
+
+test('a new stock needs its shares and cost', () => {
+  assert.deepEqual(readHoldings([entry('BBB', '', '', '-5')], saved).errors, ['BBB has no share count']);
+  assert.deepEqual(readHoldings([entry('BBB', '1', '', '-5')], saved).errors, ['BBB has no total cost']);
 });
 
 test('skips blank rows', () => {

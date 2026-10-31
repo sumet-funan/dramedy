@@ -80,9 +80,9 @@ export function createSupabaseStore(client, userId) {
       return data;
     },
 
-    // Replaces the whole list: anything traded but not listed is now fully sold.
-    // Prices are saved separately so a row without one keeps the price it had.
-    async replaceHoldings(rows, soldTickers) {
+    // Only the listed stocks change. Prices are saved separately so a row without
+    // one keeps the price it had.
+    async saveHoldings(rows) {
       const now = new Date().toISOString();
       const saved = await client.from('holdings').upsert(
         rows.map(({ ticker, shares, total_cost_usd }) => ({
@@ -91,15 +91,9 @@ export function createSupabaseStore(client, userId) {
       );
       if (saved.error) throw saved.error;
 
-      const listed = rows.map((row) => `"${row.ticker}"`).join(',');
-      const removal = await client.from('holdings').delete().not('ticker', 'in', `(${listed})`);
-      if (removal.error) throw removal.error;
-
-      const statuses = [
-        ...rows.map((row) => ({ ticker: row.ticker, status: 'holding' })),
-        ...soldTickers.map((ticker) => ({ ticker, status: 'sold' })),
-      ].map((row) => ({ ...row, user_id: userId, updated_at: now }));
-      const marked = await client.from('stock_status').upsert(statuses);
+      const marked = await client.from('stock_status').upsert(rows.map(({ ticker }) => ({
+        ticker, status: 'holding', user_id: userId, updated_at: now,
+      })));
       if (marked.error) throw marked.error;
 
       await setPrices(rows
@@ -129,7 +123,7 @@ export function createSupabaseStore(client, userId) {
 export function createDemoStore({ transactions, statuses, holdings }) {
   let rows = [...transactions];
   const chosen = { ...statuses };
-  let held = { ...holdings };
+  const held = { ...holdings };
   let nextId = rows.length + 1;
 
   return {
@@ -154,21 +148,19 @@ export function createDemoStore({ transactions, statuses, holdings }) {
       });
       return { prices: Object.fromEntries(prices), failed: [] };
     },
-    async replaceHoldings(listed, soldTickers) {
+    async saveHoldings(listed) {
       const updated_at = new Date().toISOString();
-      held = Object.fromEntries(listed.map((row) => [
-        row.ticker,
-        {
+      listed.forEach((row) => {
+        held[row.ticker] = {
           current_price_usd: held[row.ticker]?.current_price_usd ?? null,
           price_updated_at: row.current_price_usd === undefined
             ? held[row.ticker]?.price_updated_at ?? null
             : updated_at,
           ...row,
           updated_at,
-        },
-      ]));
-      listed.forEach((row) => { chosen[row.ticker] = 'holding'; });
-      soldTickers.forEach((ticker) => { chosen[ticker] = 'sold'; });
+        };
+        chosen[row.ticker] = 'holding';
+      });
     },
     async add(row) {
       rows.push({ ...row, id: String(nextId++) });

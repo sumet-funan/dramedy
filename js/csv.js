@@ -62,9 +62,9 @@ const impliedPrice = ({ shares, total, unrealized }) => (
   Math.round(((total + unrealized) / shares) * 1e6) / 1e6
 );
 
-// Reads the holdings form. Only a row with new figures gets a new price, so the
-// price date stays true for rows left as they were.
-export function readHoldings(entries) {
+// Reads the holdings form. A stock already held keeps any figure left blank, so
+// a row can update just its result. Anything new needs its shares and cost.
+export function readHoldings(entries, saved = {}) {
   const filled = entries.filter((entry) => (
     entry.ticker || entry.shares || entry.total || entry.unrealized
   ));
@@ -74,14 +74,17 @@ export function readHoldings(entries) {
   const seen = new Set();
   const rows = filled.map((entry) => {
     const ticker = entry.ticker.toUpperCase();
-    const shares = Number(entry.shares);
-    const total = entry.total === '' ? NaN : Number(entry.total);
+    const held = saved[ticker];
+    const shares = entry.shares === '' ? held?.shares : Number(entry.shares);
+    const total = entry.total === '' ? held?.total : Number(entry.total);
     const unrealized = Number(entry.unrealized);
-    const hasResult = entry.changed && entry.unrealized !== '';
+    const hasResult = entry.unrealized !== '';
 
     if (!TICKER_PATTERN.test(ticker)) errors.push(t('holdings.badTicker'));
     else if (seen.has(ticker)) errors.push(t('holdings.twice', { ticker }));
-    else if (!(shares > 0)) errors.push(t('holdings.noShares', { ticker }));
+    else if (held && !entry.shares && !entry.total && !hasResult) {
+      errors.push(t('holdings.nothing', { ticker }));
+    } else if (!(shares > 0)) errors.push(t('holdings.noShares', { ticker }));
     else if (!(total >= 0)) errors.push(t('holdings.noTotal', { ticker }));
     else if (hasResult && !(total + unrealized >= 0)) {
       errors.push(t('holdings.lossTooLarge', { ticker }));
