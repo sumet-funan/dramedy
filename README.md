@@ -39,13 +39,17 @@ npm test
 
 ## Reading screenshots
 
-Holdings can be filled in from screenshots of the broker's portfolio screen, and
-trades from its history screen. The text is read in the browser by Tesseract in
-`vendor/tesseract`, so images are never uploaded, and nothing is saved until the
-rows are checked and submitted. A row the reader doubts blocks saving until the
-doubtful field is changed or the row is marked as checked. The holdings form shows
-the same figures as the broker's screen, and the cost is worked out when saving, as
-value minus gain or loss.
+Trades can be filled in from screenshots of the broker's history screen. The text
+is read in the browser by Tesseract in `vendor/tesseract`, so images are never
+uploaded, and nothing is saved until the rows are checked and submitted. A row the
+reader doubts blocks saving until the doubtful field is changed or the row is marked
+as checked.
+
+## Holdings
+
+Holdings are typed in from the broker's portfolio screen, and the form shows the
+same figures as that screen. The cost is worked out when saving, as value minus gain
+or loss.
 
 ## Duplicates
 

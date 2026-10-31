@@ -7,10 +7,6 @@ const ENGINE = new URL('../vendor/tesseract', import.meta.url).href;
 const SINGLE_BLOCK = '6';
 const SINGLE_LINE = '7';
 
-// Only tickers and figures matter, and this stops the Thai labels on the screen
-// being read as lookalike letters.
-const CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,%()+- ';
-
 async function startWorker(language) {
   const { default: Tesseract } = await import('../vendor/tesseract/tesseract.esm.min.js');
   return Tesseract.createWorker(language, 1, {
@@ -22,39 +18,8 @@ async function startWorker(language) {
   });
 }
 
-// Short tickers next to a logo lose letters at phone screenshot size.
-const READING_WIDTH = 1800;
-
-async function enlarged(file) {
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.max(1, READING_WIDTH / bitmap.width);
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  const context = canvas.getContext('2d');
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  return canvas;
-}
-
-export async function readImages(files, onProgress) {
-  const worker = await startWorker('eng');
-
-  try {
-    await worker.setParameters({ tessedit_char_whitelist: CHARACTERS });
-    const texts = [];
-    for (const [index, file] of files.entries()) {
-      onProgress(index + 1);
-      const { data } = await worker.recognize(await enlarged(file));
-      texts.push(data.text);
-    }
-    return texts;
-  } finally {
-    await worker.terminate();
-  }
-}
-
+// Only tickers and figures matter, and this stops the Thai labels on the screen
+// being read as lookalike letters.
 const ROW_CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,+- ';
 const DATE_CHARACTERS = '0123456789:. -';
 

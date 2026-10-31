@@ -1,8 +1,7 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import { monthOf, summarize, toCents } from './calc.js';
 import {
-  COST_TOLERANCE_USD, figuresAgree, isPositiveType, needsTicker, normalizeRow, parseCsv,
-  readHoldings, readPortfolio, toCsv,
+  figuresAgree, isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
 import { DUPLICATE_ROW, fillsShares, findDuplicates } from './duplicates.js';
@@ -10,7 +9,7 @@ import {
   LANGUAGES, applyLanguage, currentLanguage, plural, setLanguage, t,
 } from './i18n.js';
 import { icon } from './icons.js';
-import { readImages, readTradeImages } from './ocr.js';
+import { readTradeImages } from './ocr.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
 import { readTradeRows } from './trade-screen.js';
 
@@ -708,13 +707,12 @@ function tradeImport() {
     })));
 }
 
-// A doubt about a row read from an image clears only when a field that settles it
-// changes, or when the viewer says the row is right.
+// A doubt about a row clears only when a field that settles it changes, or when
+// the viewer says the row is right.
 const CHECKS = {
   date: { fields: ['date'], text: () => t('tradeImage.checkDate') },
   ticker: { fields: ['ticker'], text: () => t('tradeImage.checkTicker') },
   figures: { fields: ['value', 'percent', 'unrealized'], text: () => t('holdings.checkFigures') },
-  shares: { fields: ['shares'], text: () => t('holdings.checkShares') },
 };
 
 const checksOf = (row) => (row.dataset.checks || '').split(' ').filter(Boolean);
@@ -1162,46 +1160,6 @@ function savedHoldings() {
   ]));
 }
 
-function rowFor(list, ticker, newRow) {
-  const rows = [...list.children];
-  const row = rows.find((item) => tickerOf(item) === ticker)
-    ?? rows.find((item) => tickerOf(item) === '')
-    ?? list.appendChild(newRow({}));
-  fieldOf(row, 'ticker').value = ticker;
-  return row;
-}
-
-// Fills rows without saving, so a misread figure can be fixed first. The screen
-// has no share counts, so a held stock shows the count already saved, and a stock
-// whose cost moved is marked because its share count may have moved too.
-function fillHoldings(list, stocks, saved, newRow) {
-  for (const stock of stocks) {
-    const row = rowFor(list, stock.ticker, newRow);
-    const held = saved[stock.ticker];
-    const moved = held && Math.abs(held.total - stock.total) > COST_TOLERANCE_USD;
-
-    if (held) fieldOf(row, 'shares').value = held.shares;
-    fieldOf(row, 'value').value = stock.value;
-    fieldOf(row, 'percent').value = stock.percent;
-    fieldOf(row, 'unrealized').value = stock.unrealized;
-    row.dataset.checks = [!stock.agrees && 'figures', moved && 'shares'].filter(Boolean).join(' ');
-    fieldOf(row, 'ticker').dispatchEvent(new Event('input', { bubbles: true }));
-  }
-}
-
-function imageSummary(stocks, saved) {
-  const read = new Set(stocks.map((stock) => stock.ticker));
-  const unread = Object.keys(saved).filter((ticker) => !read.has(ticker));
-  const brandNew = stocks.filter((stock) => !saved[stock.ticker]).map((stock) => stock.ticker);
-  const mention = (key, tickers) => tickers.length > 0 && t(key, { tickers: tickers.join(', ') });
-
-  return [
-    plural('image.read', stocks.length),
-    mention('image.brandNew', brandNew),
-    mention('image.unread', unread),
-  ].filter(Boolean).join(' ');
-}
-
 // One line per stock, so the viewer can see what a save replaces before it does.
 function changeLine(row, held) {
   const {
@@ -1267,26 +1225,6 @@ function holdingsForm() {
     saveDraft();
   };
 
-  const importImages = async (event) => {
-    const files = [...event.target.files];
-    event.target.value = '';
-    if (files.length === 0) return;
-
-    show(t('image.loading'));
-    try {
-      const texts = await readImages(files, (current) => {
-        show(t('image.reading', { current, total: files.length }));
-      });
-      const stocks = [...new Map(
-        texts.flatMap(readPortfolio).map((stock) => [stock.ticker, stock]),
-      ).values()];
-      fillHoldings(list, stocks, saved, newRow);
-      show(stocks.length > 0 ? imageSummary(stocks, saved) : t('image.none'));
-    } catch (error) {
-      show(`${t('image.failed')} ${describeError(error)}`);
-    }
-  };
-
   const markProblems = (problems) => {
     const rows = [...list.children];
     for (const { index, message } of problems) {
@@ -1328,15 +1266,7 @@ function holdingsForm() {
     section(null, h('div', { class: 'card' },
       list,
       note,
-      h('button', { class: 'row row-button action', type: 'button', onClick: addRow }, t('holdings.add')),
-      h('label', { class: 'row row-button action' }, t('image.import'), h('input', {
-        class: 'file-input',
-        type: 'file',
-        accept: 'image/*',
-        multiple: true,
-        'aria-label': t('image.import'),
-        onChange: importImages,
-      }))),
+      h('button', { class: 'row row-button action', type: 'button', onClick: addRow }, t('holdings.add'))),
     t('holdings.footer')),
     save);
 }

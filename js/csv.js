@@ -58,7 +58,7 @@ export function normalizeRow(input) {
 
 // Close to this, the saved cost stays, because it's the broker's own figure and the
 // one worked out from the screen comes from rounded ones.
-export const COST_TOLERANCE_USD = 0.05;
+const COST_TOLERANCE_USD = 0.05;
 
 // The screen shows a stock's value and its gain or loss, so the cost is the
 // difference. With only one of them, a stock already held keeps its cost.
@@ -112,65 +112,16 @@ export function readHoldings(entries, saved = {}) {
   return { rows, errors: problems.map((problem) => problem.message), problems };
 }
 
-const PORTFOLIO_STOCK = /([A-Z][A-Z0-9.-]{0,9})\s+([\d,]+\.\d{2})\s+(?:\S+\s+){0,2}?([-+]?[\d,]+\.\d{2})\s*%/;
-const PORTFOLIO_RESULT = /\(\s*([-+]?[\d,]+\.\d{2})\s*USD/;
-
 // The percentage is rounded, so a small position can land slightly off.
 const PERCENT_TOLERANCE = 0.1;
 
-const readAmount = (text) => Number(text.replaceAll(',', ''));
 const roundCents = (value) => Math.round(value * 100) / 100;
 
-// The screen shows value, gain or loss and percentage, so a misread figure leaves
+// The screen shows value, gain or loss and percentage, so a mistyped figure leaves
 // the three disagreeing.
 export function figuresAgree({ value, unrealized, percent }) {
   const cost = value - unrealized;
   return cost > 0 && Math.abs((unrealized / cost) * 100 - percent) <= PERCENT_TOLERANCE;
-}
-
-// Small minus signs on pale text get lost, and only one sign can make the three
-// figures agree, so a lost one is put back. A minus read anywhere goes first
-// because very small changes fit either sign.
-function settleSign({ value, unrealized, percent }) {
-  const signs = unrealized < 0 || percent < 0 ? [-1, 1] : [1, -1];
-  const sign = signs.find((candidate) => figuresAgree({
-    value,
-    unrealized: candidate * Math.abs(unrealized),
-    percent: candidate * Math.abs(percent),
-  }));
-  return sign
-    ? { unrealized: sign * Math.abs(unrealized), percent: sign * Math.abs(percent), agrees: true }
-    : { unrealized, percent, agrees: false };
-}
-
-// Reads the broker's portfolio screen, where each stock takes two lines. The
-// screen has no share counts, so the cost comes from value minus gain or loss.
-export function readPortfolio(text) {
-  const stocks = [];
-  let open = null;
-
-  for (const line of text.split(/\r?\n/)) {
-    const stock = line.match(PORTFOLIO_STOCK);
-    const result = line.match(PORTFOLIO_RESULT);
-    if (stock) {
-      open = { ticker: stock[1], value: readAmount(stock[2]), percent: readAmount(stock[3]) };
-    } else if (result && open) {
-      const { unrealized, percent, agrees } = settleSign({
-        ...open,
-        unrealized: readAmount(result[1]),
-      });
-      stocks.push({
-        ticker: open.ticker,
-        value: open.value,
-        percent,
-        unrealized,
-        total: roundCents(open.value - unrealized),
-        agrees,
-      });
-      open = null;
-    }
-  }
-  return stocks;
 }
 
 function parseLine(line) {
