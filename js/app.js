@@ -4,23 +4,16 @@ import {
   isPositiveType, needsTicker, normalizeRow, parseCsv, parseHoldings, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
+import {
+  LANGUAGES, applyLanguage, currentLanguage, plural, setLanguage, t,
+} from './i18n.js';
 import { icon } from './icons.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
 
-const TYPE_LABELS = {
-  buy: 'Buy',
-  sell: 'Sell',
-  dividend: 'Dividend',
-  withholding: 'Dividend tax',
-  fee_sec: 'SEC fee',
-  fee_taf: 'TAF fee',
-  fee_cat: 'CAT fee',
-  commission_refund: 'Commission refund',
-  deposit: 'Deposit',
-  withdrawal: 'Withdrawal',
-  fx_in: 'Exchange in',
-  fx_out: 'Exchange out',
-};
+const TRADE_TYPES = [
+  'buy', 'sell', 'dividend', 'withholding', 'fee_sec', 'fee_taf', 'fee_cat',
+  'commission_refund', 'deposit', 'withdrawal', 'fx_in', 'fx_out',
+];
 
 const TYPE_GLYPHS = {
   fee_sec: '%',
@@ -34,19 +27,14 @@ const TYPE_GLYPHS = {
 };
 
 const VIEWS = [
-  { id: 'overview', label: 'Overview', title: 'Overview', render: renderOverview },
-  { id: 'stocks', label: 'Stocks', title: 'Stocks', render: renderStocks },
-  { id: 'trades', label: 'Trades', title: 'Trades', render: renderTrades },
-  { id: 'add', label: 'Add', title: 'New Trade', render: renderAdd },
-  { id: 'more', label: 'More', title: 'More', render: renderMore },
+  { id: 'overview', render: renderOverview },
+  { id: 'stocks', render: renderStocks },
+  { id: 'trades', render: renderTrades },
+  { id: 'add', render: renderAdd },
+  { id: 'more', render: renderMore },
 ];
 
-const STOCK_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'review', label: 'Review' },
-  { id: 'holding', label: 'Holding' },
-  { id: 'sold', label: 'Sold' },
-];
+const STOCK_FILTERS = ['all', 'review', 'holding', 'sold'];
 
 const root = document.getElementById('app');
 const isDemo = new URLSearchParams(location.search).has('demo');
@@ -90,38 +78,42 @@ const money = (cents) => usd.format(cents / 100);
 const signedMoney = (cents) => `${cents > 0 ? '+' : ''}${money(cents)}`;
 const toneOf = (cents) => (cents > 0 ? 'gain' : cents < 0 ? 'loss' : '');
 
-const dateFormat = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Bangkok',
-  day: 'numeric',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit',
-});
-const monthFormat = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'UTC',
-  month: 'short',
-  year: 'numeric',
-});
-const longMonthFormat = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'UTC',
-  month: 'long',
-  year: 'numeric',
-});
-const dayFormat = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Bangkok',
-  day: 'numeric',
-  month: 'short',
-});
+// Rebuilt when the language changes, because they are slow to create per row.
+function makeFormats() {
+  const { locale } = currentLanguage();
+  return {
+    date: new Intl.DateTimeFormat(locale, {
+      timeZone: 'Asia/Bangkok',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+    month: new Intl.DateTimeFormat(locale, { timeZone: 'UTC', month: 'short', year: 'numeric' }),
+    longMonth: new Intl.DateTimeFormat(locale, { timeZone: 'UTC', month: 'long', year: 'numeric' }),
+    day: new Intl.DateTimeFormat(locale, {
+      timeZone: 'Asia/Bangkok',
+      day: 'numeric',
+      month: 'short',
+    }),
+  };
+}
+
+let formats = makeFormats();
+
 const priceText = (price) => `$${price.toLocaleString('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 })}`;
 const monthDate = (key) => new Date(`${key}-01T00:00:00Z`);
-const monthLabel = (key) => monthFormat.format(monthDate(key));
+const monthLabel = (key) => formats.month.format(monthDate(key));
+const typeLabel = (type) => t(`type.${type}`);
 
 function bangkokNowForInput() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 16);
 }
+
+const listErrors = (errors) => errors.slice(0, 3).join(t('error.join'));
 
 function setNotice(kind, text) {
   state.notice = { kind, text };
@@ -130,13 +122,13 @@ function setNotice(kind, text) {
 function describeError(error) {
   const message = String(error?.message ?? error);
   if (error?.code === 'over_email_send_rate_limit') {
-    return 'Too many sign-in emails. The free plan sends about 2 an hour, so try again later or sign in with your password.';
+    return t('error.emailLimit');
   }
   if (error?.code === 'invalid_credentials') {
-    return 'Wrong email or password. If you haven’t set a password yet, sign in with an email link first.';
+    return t('error.credentials');
   }
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
-    return 'Can’t reach the database. If the app has been idle for a week, restore the project in the Supabase dashboard.';
+    return t('error.network');
   }
   return message;
 }
@@ -170,30 +162,47 @@ function updateNavbar() {
   document.body.classList.toggle('scrolled', window.scrollY > 40);
 }
 
+function languageSwitch(show) {
+  return h('div', { class: 'segmented language', role: 'group', 'aria-label': t('language') },
+    LANGUAGES.map(({ id, short, name }) => h('button', {
+      type: 'button',
+      lang: id,
+      'aria-label': name,
+      'aria-pressed': id === currentLanguage().id ? 'true' : 'false',
+      onClick: () => {
+        setLanguage(id);
+        formats = makeFormats();
+        show();
+      },
+    }, short)));
+}
+
 function tabBar() {
-  return h('nav', { class: 'tabbar', 'aria-label': 'Sections' },
+  return h('nav', { class: 'tabbar', 'aria-label': t('sections') },
     VIEWS.map((item) => h('button', {
       type: 'button',
       class: 'tab',
       'aria-current': item.id === state.view ? 'page' : null,
       onClick: () => goTo(item.id),
-    }, icon(item.id), h('span', {}, item.label))));
+    }, icon(item.id), h('span', {}, t(`tab.${item.id}`)))));
 }
 
 function render() {
   const view = VIEWS.find((item) => item.id === state.view);
+  const title = t(`title.${view.id}`);
   const notice = state.notice;
   state.notice = null;
 
   const main = h('main', { class: `content${state.animate ? ' enter' : ''}` },
     h('div', { class: 'title-row' },
-      h('h1', { class: 'large-title' }, view.title),
-      isDemo && h('span', { class: 'badge' }, 'Demo')),
+      h('h1', { class: 'large-title' }, title),
+      isDemo && h('span', { class: 'badge' }, t('demo')),
+      languageSwitch(render)),
     view.render());
   state.animate = false;
 
   root.replaceChildren(...[
-    h('header', { class: 'navbar' }, h('span', { class: 'navbar-title' }, view.title)),
+    h('header', { class: 'navbar' }, h('span', { class: 'navbar-title' }, title)),
     notice && h('p', {
       class: `toast ${notice.kind}`,
       role: notice.kind === 'bad' ? 'alert' : 'status',
@@ -244,25 +253,25 @@ function monthlyChart(monthly) {
 function emptyState() {
   return h('section', { class: 'empty' },
     h('div', { class: 'orb', 'aria-hidden': 'true' }),
-    h('h2', {}, 'Your story starts here'),
-    h('p', {}, 'Import your trade history to bring this place to life.'),
-    h('button', { class: 'capsule', type: 'button', onClick: () => goTo('more') }, 'Import trades'));
+    h('h2', {}, t('empty.title')),
+    h('p', {}, t('empty.text')),
+    h('button', { class: 'capsule', type: 'button', onClick: () => goTo('more') }, t('empty.action')));
 }
 
 function pricedHint(s) {
   return s.pricedCount === s.heldCount
-    ? 'All stocks priced'
-    : `${s.pricedCount} of ${s.heldCount} stocks priced`;
+    ? t('priced.all')
+    : t('priced.some', { priced: s.pricedCount, held: s.heldCount });
 }
 
 function overallHint(s) {
   if (s.pricedCount < s.heldCount) {
-    return `Total profit + Unrealized. Incomplete: ${pricedHint(s).toLowerCase()}`;
+    const incomplete = t('overall.incomplete', { priced: pricedHint(s).toLowerCase() });
+    return `${t('overall.formula')} · ${incomplete}`;
   }
-  const share = s.moneyAdded > 0
-    ? ` · ${((s.overall / s.moneyAdded) * 100).toFixed(1)}% of money added`
-    : '';
-  return `Total profit + Unrealized${share}`;
+  if (s.moneyAdded <= 0) return t('overall.formula');
+  const percent = ((s.overall / s.moneyAdded) * 100).toFixed(1);
+  return `${t('overall.formula')} · ${t('overall.share', { percent })}`;
 }
 
 function renderOverview() {
@@ -271,9 +280,9 @@ function renderOverview() {
 
   return h('div', { class: 'stack' },
     h('section', { class: 'hero' },
-      h('div', { class: 'hero-label' }, icon('overview'), 'Total profit'),
+      h('div', { class: 'hero-label' }, icon('overview'), t('hero.label')),
       h('div', { class: 'hero-value' }, signedMoney(s.totalProfit)),
-      h('div', { class: 'hero-hint' }, 'Realized profit, plus dividends, minus fees')),
+      h('div', { class: 'hero-hint' }, t('hero.hint'))),
 
     s.needsReview > 0 && h('button', {
       class: 'card row row-button review',
@@ -285,65 +294,68 @@ function renderOverview() {
     },
     h('span', { class: 'row-icon warn' }, icon('alert')),
     h('span', { class: 'row-main' },
-      h('span', { class: 'row-title' },
-        `${s.needsReview} ${s.needsReview === 1 ? 'stock needs' : 'stocks need'} a status`),
-      h('span', { class: 'row-subtitle' }, 'Its profit isn’t counted until then')),
+      h('span', { class: 'row-title' }, plural('review.title', s.needsReview)),
+      h('span', { class: 'row-subtitle' }, t('review.hint'))),
     icon('chevron')),
 
     h('section', { class: 'tiles' },
-      s.heldCount > 0 && tile('Overall', signedMoney(s.overall), overallHint(s), 'wide'),
-      tile('Realized', signedMoney(s.realized), 'Profit taken so far'),
+      s.heldCount > 0 && tile(t('overall.label'), signedMoney(s.overall), overallHint(s), 'wide'),
+      tile(t('tile.realized'), signedMoney(s.realized), t('tile.realizedHint')),
       s.heldCount > 0 && tile(
-        'Unrealized',
+        t('tile.unrealized'),
         s.pricedCount > 0 ? signedMoney(s.unrealized) : '—',
         pricedHint(s),
       ),
       s.heldCount > 0 && tile(
-        'Market value',
+        t('tile.marketValue'),
         s.pricedCount > 0 ? money(s.marketValue) : '—',
         pricedHint(s),
       ),
-      tile('Still invested', money(s.stillInvested), 'At cost'),
-      tile('Cash balance', money(s.cash), 'From your rows'),
-      tile('Money added', money(s.moneyAdded), 'Deposits and exchanges'),
-      tile('Dividends', signedMoney(s.dividends + s.tax), 'After tax'),
-      tile('Fees', money(Math.abs(s.fees + s.refunds)), 'After refunds')),
+      tile(t('tile.invested'), money(s.stillInvested), t('tile.investedHint')),
+      tile(t('tile.cash'), money(s.cash), t('tile.cashHint')),
+      tile(t('tile.moneyAdded'), money(s.moneyAdded), t('tile.moneyAddedHint')),
+      tile(t('tile.dividends'), signedMoney(s.dividends + s.tax), t('tile.dividendsHint')),
+      tile(t('tile.fees'), money(Math.abs(s.fees + s.refunds)), t('tile.feesHint'))),
 
     section(
-      'Profit by month',
+      t('chart.title'),
       s.monthly.length > 0
         ? monthlyChart(s.monthly)
-        : h('div', { class: 'card card-note' }, 'Mark a stock as fully sold to see it here.'),
+        : h('div', { class: 'card card-note' }, t('chart.empty')),
       s.monthly.length > 0
-        && 'Each stock’s whole realized profit appears in the month of its latest sale.',
+        && t('chart.footer'),
     ));
 }
 
 function statusPicker(stock) {
   return h('select', {
     class: 'pill-select',
-    'aria-label': `Status of ${stock.ticker}`,
+    'aria-label': t('status.label', { ticker: stock.ticker }),
     onChange: (event) => run(
       () => state.store.setStatus(stock.ticker, event.target.value),
-      `${stock.ticker} updated`,
+      t('status.updated', { ticker: stock.ticker }),
     ),
   },
   stock.status === 'review' && h('option', {
     value: 'review', selected: true, disabled: true, hidden: true,
-  }, 'Needs status'),
-  h('option', { value: 'holding', selected: stock.status === 'holding' }, 'Still holding'),
-  h('option', { value: 'sold', selected: stock.status === 'sold' }, 'Fully sold'));
+  }, t('status.review')),
+  h('option', { value: 'holding', selected: stock.status === 'holding' }, t('status.holding')),
+  h('option', { value: 'sold', selected: stock.status === 'sold' }, t('status.sold')));
 }
 
 function heldFacts(stock) {
-  const shares = stock.sharesHeld.toLocaleString('en-US');
-  return `${shares} shares · ${money(Math.round(stock.costLeft / stock.sharesHeld))} avg cost`;
+  return t('stock.held', {
+    shares: stock.sharesHeld.toLocaleString('en-US'),
+    cost: money(Math.round(stock.costLeft / stock.sharesHeld)),
+  });
 }
 
 function priceFacts(stock) {
-  if (stock.price === null) return 'Add a price in More to see unrealized profit';
-  const day = stock.priceUpdatedAt ? ` on ${dayFormat.format(new Date(stock.priceUpdatedAt))}` : '';
-  return `${priceText(stock.price)} price${day} · ${money(stock.marketValue)} value`;
+  if (stock.price === null) return t('stock.noPrice');
+  const facts = { price: priceText(stock.price), value: money(stock.marketValue) };
+  return stock.priceUpdatedAt
+    ? t('stock.priceOn', { ...facts, day: formats.day.format(new Date(stock.priceUpdatedAt)) })
+    : t('stock.price', facts);
 }
 
 function stockAmounts(stock) {
@@ -352,10 +364,10 @@ function stockAmounts(stock) {
     return [
       h('span', { class: `row-amount ${hasPrice ? toneOf(stock.unrealized) : ''}` },
         hasPrice ? signedMoney(stock.unrealized) : money(stock.costLeft)),
-      h('span', { class: 'row-subtitle' }, hasPrice ? 'Unrealized' : 'Invested'),
+      h('span', { class: 'row-subtitle' }, t(hasPrice ? 'stock.unrealized' : 'stock.invested')),
       stock.realized !== null && h('span', { class: `row-amount small ${toneOf(stock.realized)}` },
         signedMoney(stock.realized)),
-      stock.realized !== null && h('span', { class: 'row-subtitle' }, 'Realized'),
+      stock.realized !== null && h('span', { class: 'row-subtitle' }, t('stock.realized')),
     ];
   }
 
@@ -363,12 +375,12 @@ function stockAmounts(stock) {
   return [
     h('span', { class: `row-amount ${hasProfit ? toneOf(stock.realized) : ''}` },
       hasProfit ? signedMoney(stock.realized) : money(stock.costLeft)),
-    h('span', { class: 'row-subtitle' }, hasProfit ? 'Profit' : 'Invested'),
+    h('span', { class: 'row-subtitle' }, t(hasProfit ? 'stock.profit' : 'stock.invested')),
   ];
 }
 
 function stockRow(stock) {
-  const trades = `Bought ${money(stock.bought)} · Sold ${money(stock.sold)}`;
+  const trades = t('stock.trades', { bought: money(stock.bought), sold: money(stock.sold) });
   const usesTradeShares = stock.exact && !stock.fromHolding;
 
   return h('li', { class: 'row stock-row' },
@@ -379,13 +391,13 @@ function stockRow(stock) {
       stock.fromHolding && h('span', { class: 'row-subtitle' }, priceFacts(stock)),
       h('span', { class: 'row-subtitle' }, trades),
       usesTradeShares && h('span', { class: 'row-subtitle' },
-        `${stock.sharesHeld.toLocaleString('en-US')} shares held`),
+        t('stock.sharesHeld', { shares: stock.sharesHeld.toLocaleString('en-US') })),
       stock.oversold && h('span', { class: 'row-warning' },
-        icon('alert'), 'More shares sold than bought. A buy may be missing.'),
+        icon('alert'), t('stock.oversold')),
       stock.outdated && h('span', { class: 'row-warning' },
-        icon('alert'), 'Traded since this holding was updated'),
+        icon('alert'), t('stock.outdated')),
       usesTradeShares
-        ? h('span', { class: 'row-subtitle' }, 'Status comes from your share counts')
+        ? h('span', { class: 'row-subtitle' }, t('stock.fromShares'))
         : statusPicker(stock)),
     h('div', { class: 'row-end' }, stockAmounts(stock)));
 }
@@ -396,18 +408,18 @@ function renderStocks() {
   );
 
   return h('div', { class: 'stack' },
-    h('div', { class: 'segmented', role: 'group', 'aria-label': 'Filter stocks' },
+    h('div', { class: 'segmented', role: 'group', 'aria-label': t('filter.label') },
       STOCK_FILTERS.map((filter) => h('button', {
         type: 'button',
-        'aria-pressed': state.stockFilter === filter.id ? 'true' : 'false',
+        'aria-pressed': state.stockFilter === filter ? 'true' : 'false',
         onClick: () => {
-          state.stockFilter = filter.id;
+          state.stockFilter = filter;
           render();
         },
-      }, filter.label))),
+      }, t(`filter.${filter}`)))),
     stocks.length > 0
       ? h('ul', { class: 'card' }, stocks.map(stockRow))
-      : h('div', { class: 'card card-note' }, 'Nothing in this group.'));
+      : h('div', { class: 'card card-note' }, t('filter.empty')));
 }
 
 function matchesTradeFilters(tx) {
@@ -416,7 +428,7 @@ function matchesTradeFilters(tx) {
 }
 
 function tradeRow(tx, rerender) {
-  const label = [TYPE_LABELS[tx.type], tx.ticker].filter(Boolean).join(' ');
+  const label = [typeLabel(tx.type), tx.ticker].filter(Boolean).join(' ');
   const cents = Math.round(Number(tx.amount_usd) * 100);
   const isOpen = state.openTrade === tx.id;
 
@@ -435,20 +447,20 @@ function tradeRow(tx, rerender) {
       : h('span', { class: 'monogram quiet', 'aria-hidden': 'true' }, TYPE_GLYPHS[tx.type] ?? '·'),
     h('span', { class: 'row-main' },
       h('span', { class: 'row-title' }, label),
-      h('span', { class: 'row-subtitle' }, dateFormat.format(new Date(tx.occurred_at)))),
+      h('span', { class: 'row-subtitle' }, formats.date.format(new Date(tx.occurred_at)))),
     h('span', { class: `row-amount ${cents > 0 ? 'gain' : ''}` }, signedMoney(cents))),
     isOpen && h('div', { class: 'trade-detail' },
-      tx.shares && h('p', {}, `${Number(tx.shares).toLocaleString('en-US')} shares`),
+      tx.shares && h('p', {}, t('trade.shares', { shares: Number(tx.shares).toLocaleString('en-US') })),
       tx.note && h('p', {}, tx.note),
       h('button', {
         class: 'text-button destructive',
         type: 'button',
         onClick: () => {
-          if (confirm(`Delete ${label} (${signedMoney(cents)})?`)) {
-            run(() => state.store.remove(tx.id), 'Trade deleted');
+          if (confirm(t('trade.confirmDelete', { label, amount: signedMoney(cents) }))) {
+            run(() => state.store.remove(tx.id), t('trade.deleted'));
           }
         },
-      }, 'Delete trade')));
+      }, t('trade.delete'))));
 }
 
 function renderTradeList(container) {
@@ -460,13 +472,13 @@ function renderTradeList(container) {
   }
 
   if (groups.size === 0) {
-    container.replaceChildren(h('div', { class: 'card card-note' }, 'No trades match.'));
+    container.replaceChildren(h('div', { class: 'card card-note' }, t('trade.noMatch')));
     return;
   }
 
   const rerender = () => renderTradeList(container);
   container.replaceChildren(...[...groups].map(([month, rows]) => section(
-    longMonthFormat.format(monthDate(month)),
+    formats.longMonth.format(monthDate(month)),
     h('ul', { class: 'card' }, rows.map((tx) => tradeRow(tx, rerender))),
   )));
 }
@@ -481,8 +493,8 @@ function renderTrades() {
         icon('search'),
         h('input', {
           type: 'search',
-          placeholder: 'Search ticker',
-          'aria-label': 'Search ticker',
+          placeholder: t('trade.search'),
+          'aria-label': t('trade.search'),
           value: state.tradeSearch,
           autocapitalize: 'characters',
           autocomplete: 'off',
@@ -493,17 +505,17 @@ function renderTrades() {
         })),
       h('select', {
         class: 'pill-select',
-        'aria-label': 'Filter by type',
+        'aria-label': t('trade.filterType'),
         onChange: (event) => {
           state.tradeType = event.target.value;
           renderTradeList(results);
         },
       },
-      h('option', { value: '' }, 'All types'),
-      Object.entries(TYPE_LABELS).map(([value, label]) => h('option', {
+      h('option', { value: '' }, t('trade.allTypes')),
+      TRADE_TYPES.map((value) => h('option', {
         value,
         selected: value === state.tradeType,
-      }, label)))),
+      }, typeLabel(value))))),
     results);
 }
 
@@ -527,7 +539,7 @@ function submitTrade(event) {
     render();
     return;
   }
-  run(() => state.store.add(row), 'Trade added');
+  run(() => state.store.add(row), t('trade.added'));
 }
 
 function formRow(label, control) {
@@ -535,15 +547,20 @@ function formRow(label, control) {
 }
 
 function renderAdd() {
-  const ticker = formRow('Ticker', h('input', {
+  const ticker = formRow(t('form.ticker'), h('input', {
     name: 'ticker',
-    placeholder: 'Required',
+    placeholder: t('form.required'),
     autocapitalize: 'characters',
     autocomplete: 'off',
     maxlength: 10,
   }));
-  const shares = formRow('Shares', h('input', {
-    name: 'shares', type: 'number', step: 'any', min: '0', inputmode: 'decimal', placeholder: 'Optional',
+  const shares = formRow(t('form.shares'), h('input', {
+    name: 'shares',
+    type: 'number',
+    step: 'any',
+    min: '0',
+    inputmode: 'decimal',
+    placeholder: t('form.optional'),
   }));
 
   const syncFields = (type) => {
@@ -555,12 +572,12 @@ function renderAdd() {
 
   return h('form', { class: 'stack', onSubmit: submitTrade },
     section(null, h('div', { class: 'card' },
-      formRow('Type', h('select', {
+      formRow(t('form.type'), h('select', {
         name: 'type',
         onChange: (event) => syncFields(event.target.value),
-      }, Object.entries(TYPE_LABELS).map(([value, label]) => h('option', { value }, label)))),
+      }, TRADE_TYPES.map((value) => h('option', { value }, typeLabel(value))))),
       ticker,
-      formRow('Amount (USD)', h('input', {
+      formRow(t('form.amount'), h('input', {
         name: 'amount',
         type: 'number',
         step: '0.01',
@@ -569,14 +586,16 @@ function renderAdd() {
         placeholder: '0.00',
         required: true,
       })),
-      shares), 'Enter the total amount, including any fees.'),
+      shares), t('form.amountHint')),
     section(null, h('div', { class: 'card' },
-      formRow('Date', h('input', {
+      formRow(t('form.date'), h('input', {
         name: 'occurred_at', type: 'datetime-local', value: bangkokNowForInput(), required: true,
       })),
-      formRow('Note', h('input', { name: 'note', maxlength: 500, placeholder: 'Optional' }))),
-    'Times are in Bangkok time.'),
-    h('button', { class: 'capsule wide', type: 'submit' }, 'Save Trade'));
+      formRow(t('form.note'), h('input', {
+        name: 'note', maxlength: 500, placeholder: t('form.optional'),
+      }))),
+    t('form.timezone')),
+    h('button', { class: 'capsule wide', type: 'submit' }, t('form.save')));
 }
 
 function downloadExport() {
@@ -587,7 +606,7 @@ function downloadExport() {
   });
   link.click();
   URL.revokeObjectURL(link.href);
-  setNotice('good', `Exported ${state.transactions.length} rows`);
+  setNotice('good', t('data.exported', { count: state.transactions.length }));
   render();
 }
 
@@ -597,15 +616,15 @@ async function importFile(event) {
 
   const { rows, errors } = parseCsv(await file.text());
   if (errors.length > 0) {
-    const more = errors.length > 3 ? ` and ${errors.length - 3} more` : '';
-    setNotice('bad', `Nothing was imported. ${errors.slice(0, 3).join('. ')}${more}.`);
+    const more = errors.length > 3 ? t('error.more', { count: errors.length - 3 }) : '';
+    setNotice('bad', t('data.importFailed', { errors: listErrors(errors), more }));
     render();
     return;
   }
 
   await run(
     () => state.store.importRows(rows),
-    (added) => `Added ${added} new, skipped ${rows.length - added} already here.`,
+    (added) => t('data.imported', { added, skipped: rows.length - added }),
   );
 }
 
@@ -624,29 +643,29 @@ function pricesForm() {
       .filter(({ price, before }) => price !== before);
 
     if (changes.length === 0) {
-      setNotice('good', 'No prices changed');
+      setNotice('good', t('prices.unchanged'));
       render();
       return;
     }
     run(
       () => state.store.setPrices(changes),
-      `${changes.length} ${changes.length === 1 ? 'price' : 'prices'} saved`,
+      plural('prices.saved', changes.length),
     );
   };
 
-  return section('Current prices', h('form', { class: 'card', onSubmit: submit },
+  return section(t('prices.title'), h('form', { class: 'card', onSubmit: submit },
     held.map((stock) => formRow(stock.ticker, h('input', {
       name: stock.ticker,
       type: 'number',
       step: 'any',
       min: '0',
       inputmode: 'decimal',
-      placeholder: 'Price',
+      placeholder: t('prices.placeholder'),
       value: stock.price ?? '',
-      'aria-label': `Current price of ${stock.ticker}`,
+      'aria-label': t('prices.label', { ticker: stock.ticker }),
     }))),
-    h('button', { class: 'row row-button action', type: 'submit' }, 'Save Prices')),
-  'Prices don’t update by themselves. Enter them here, or paste a holdings list that includes มูลค่า(USD).');
+    h('button', { class: 'row row-button action', type: 'submit' }, t('prices.save'))),
+  t('prices.footer'));
 }
 
 // A dropped minus sign in the list still parses, so the total goes in front of
@@ -660,7 +679,7 @@ function unrealizedCheck(rows) {
       - Math.round(row.total_cost_usd * 100),
     0,
   );
-  return `\n\nTotal unrealized: ${signedMoney(cents)}. Check that this matches Dime.`;
+  return `\n\n${t('holdings.check', { amount: signedMoney(cents) })}`;
 }
 
 function holdingsForm() {
@@ -668,7 +687,7 @@ function holdingsForm() {
     class: 'paste-box',
     name: 'holdings',
     rows: 6,
-    'aria-label': 'Holdings list',
+    'aria-label': t('holdings.box'),
     placeholder: 'หุ้น: AAPL\nจำนวนหุ้นคงเหลือ: 10\nต้นทุนต่อหุ้น(USD): 150\nต้นทุนรวม(USD): 1500\nมูลค่า(USD): -50',
   });
 
@@ -676,7 +695,7 @@ function holdingsForm() {
     event.preventDefault();
     const { rows, errors } = parseHoldings(box.value);
     if (errors.length > 0) {
-      setNotice('bad', `Nothing was saved. ${errors.slice(0, 3).join('. ')}.`);
+      setNotice('bad', t('holdings.failed', { errors: listErrors(errors) }));
       render();
       return;
     }
@@ -685,21 +704,24 @@ function holdingsForm() {
     const sold = state.summary.stocks
       .filter((stock) => stock.tradeCount > 0 && !listed.has(stock.ticker))
       .map((stock) => stock.ticker);
-    const question = `Save ${rows.length} holdings and mark ${sold.length} other stocks as fully sold?`;
+    const question = t('holdings.confirm', { count: rows.length, sold: sold.length });
     if (confirm(`${question}${unrealizedCheck(rows)}`)) {
-      run(() => state.store.replaceHoldings(rows, sold), `${rows.length} holdings saved`);
+      run(
+        () => state.store.replaceHoldings(rows, sold),
+        t('holdings.saved', { count: rows.length }),
+      );
     }
   };
 
   const dates = state.summary.stocks.map((stock) => stock.updatedAt).filter(Boolean).sort();
   const updated = dates.length > 0
-    ? `Last updated ${dateFormat.format(new Date(dates.at(-1)))}. `
+    ? t('holdings.updated', { date: formats.date.format(new Date(dates.at(-1))) })
     : '';
 
-  return section('Holdings', h('form', { class: 'card', onSubmit: submit },
+  return section(t('holdings.title'), h('form', { class: 'card', onSubmit: submit },
     box,
-    h('button', { class: 'row row-button action', type: 'submit' }, 'Save Holdings')),
-  `${updated}Paste your full list. Stocks you’ve traded that aren’t listed are marked as fully sold.`);
+    h('button', { class: 'row row-button action', type: 'submit' }, t('holdings.save'))),
+  `${updated}${t('holdings.footer')}`);
 }
 
 function passwordForm() {
@@ -708,70 +730,71 @@ function passwordForm() {
     const password = new FormData(event.target).get('password');
     const { error } = await state.client.auth.updateUser({ password });
     if (error) setNotice('bad', describeError(error));
-    else setNotice('good', 'Password saved. You can now sign in with it on any device.');
+    else setNotice('good', t('password.saved'));
     render();
   };
 
-  return section('Password', h('form', { class: 'card', onSubmit: submit },
-    formRow('New password', h('input', {
+  return section(t('password.title'), h('form', { class: 'card', onSubmit: submit },
+    formRow(t('password.new'), h('input', {
       name: 'password',
       type: 'password',
       autocomplete: 'new-password',
       minlength: 12,
       required: true,
-      placeholder: '12+ characters',
+      placeholder: t('password.hint'),
     })),
-    h('button', { class: 'row row-button action', type: 'submit' }, 'Save Password')));
+    h('button', { class: 'row row-button action', type: 'submit' }, t('password.save'))));
 }
 
 function renderMore() {
   return h('div', { class: 'stack' },
     pricesForm(),
     holdingsForm(),
-    section('Your data', h('div', { class: 'card' },
+    section(t('data.title'), h('div', { class: 'card' },
       h('label', { class: 'row row-button' },
         h('span', { class: 'row-icon' }, icon('import')),
-        h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, 'Import CSV')),
+        h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, t('data.import'))),
         icon('chevron'),
         h('input', {
           class: 'file-input',
           type: 'file',
           accept: '.csv,text/csv',
-          'aria-label': 'Import CSV',
+          'aria-label': t('data.import'),
           onChange: importFile,
         })),
       h('button', { class: 'row row-button', type: 'button', onClick: downloadExport },
         h('span', { class: 'row-icon' }, icon('export')),
-        h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, 'Export All Trades')),
+        h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, t('data.export'))),
         icon('chevron'))),
-    'Importing twice is safe because rows already here are skipped. The free database plan has no automatic backups, so export now and then and keep the file private.'),
+    t('data.footer')),
     !isDemo && passwordForm(),
-    !isDemo && section('Account', h('div', { class: 'card' },
+    !isDemo && section(t('account.title'), h('div', { class: 'card' },
       h('div', { class: 'row' },
         h('span', { class: 'row-main' },
-          h('span', { class: 'row-subtitle' }, 'Signed in as'),
+          h('span', { class: 'row-subtitle' }, t('account.signedIn')),
           h('span', { class: 'row-title' }, state.email))),
       h('button', {
         class: 'row row-button action destructive',
         type: 'button',
         onClick: () => state.client.auth.signOut(),
-      }, 'Sign Out'))));
+      }, t('account.signOut')))));
 }
 
-function renderLogin(message) {
+function renderLogin(message, typedEmail = '') {
   const status = h('p', { class: 'login-status', role: 'status' }, message ?? '');
   const email = h('input', {
     name: 'email',
     type: 'email',
     autocomplete: 'username',
     placeholder: 'you@example.com',
+    value: typedEmail,
     required: true,
   });
   const password = h('input', {
     name: 'password',
     type: 'password',
     autocomplete: 'current-password',
-    placeholder: 'Required',
+    placeholder: t('form.required'),
     required: true,
   });
 
@@ -779,7 +802,7 @@ function renderLogin(message) {
     event.preventDefault();
     const button = event.target.querySelector('button[type=submit]');
     button.disabled = true;
-    status.textContent = 'Signing in…';
+    status.textContent = t('login.signingIn');
 
     const { error } = await state.client.auth.signInWithPassword({
       email: email.value,
@@ -791,7 +814,7 @@ function renderLogin(message) {
 
   const sendLink = async () => {
     if (!email.reportValidity()) return;
-    status.textContent = 'Sending…';
+    status.textContent = t('login.sending');
 
     const { error } = await state.client.auth.signInWithOtp({
       email: email.value,
@@ -802,19 +825,20 @@ function renderLogin(message) {
     });
     status.textContent = error
       ? describeError(error)
-      : 'Check your email for the sign-in link. Open it in this browser.';
+      : t('login.checkEmail');
   };
 
   document.body.classList.remove('scrolled');
   root.replaceChildren(h('main', { class: 'login enter' },
     h('div', { class: 'orb', 'aria-hidden': 'true' }),
     h('h1', {}, 'Dramedy'),
-    h('p', { class: 'login-tagline' }, 'Every trade tells a story.'),
+    h('p', { class: 'login-tagline' }, t('login.tagline')),
     h('form', { class: 'login-form', onSubmit: submit },
-      h('div', { class: 'card' }, formRow('Email', email), formRow('Password', password)),
-      h('button', { class: 'capsule wide', type: 'submit' }, 'Sign In'),
-      h('button', { class: 'text-button', type: 'button', onClick: sendLink }, 'Email me a link instead')),
-    status));
+      h('div', { class: 'card' }, formRow(t('login.email'), email), formRow(t('login.password'), password)),
+      h('button', { class: 'capsule wide', type: 'submit' }, t('login.signIn')),
+      h('button', { class: 'text-button', type: 'button', onClick: sendLink }, t('login.link'))),
+    status,
+    languageSwitch(() => renderLogin('', email.value))));
 }
 
 async function openApp(session) {
@@ -830,6 +854,8 @@ async function openApp(session) {
 }
 
 async function start() {
+  applyLanguage();
+  root.querySelector('.loading').textContent = t('loading');
   window.addEventListener('scroll', updateNavbar, { passive: true });
 
   if (isDemo) {

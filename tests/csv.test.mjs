@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { normalizeRow, parseCsv, parseHoldings, toCsv } from '../js/csv.js';
+import { setLanguage } from '../js/i18n.js';
+
+setLanguage('en');
 
 const HEADER = 'occurred_at,type,ticker,amount_usd,shares,note';
 
