@@ -635,7 +635,21 @@ function pricesForm() {
       'aria-label': `Current price of ${stock.ticker}`,
     }))),
     h('button', { class: 'row row-button action', type: 'submit' }, 'Save Prices')),
-  'Prices don’t update by themselves. Enter them from Dime whenever you want a fresh view.');
+  'Prices don’t update by themselves. Enter them here, or paste a holdings list that includes มูลค่า(USD).');
+}
+
+// A dropped minus sign in the list still parses, so the total goes in front of
+// the viewer to compare with the broker's own figure before anything is saved.
+function unrealizedCheck(rows) {
+  const priced = rows.filter((row) => row.current_price_usd !== undefined);
+  if (priced.length === 0) return '';
+
+  const cents = priced.reduce(
+    (sum, row) => sum + Math.round(row.shares * row.current_price_usd * 100)
+      - Math.round(row.total_cost_usd * 100),
+    0,
+  );
+  return `\n\nTotal unrealized: ${signedMoney(cents)}. Check that this matches Dime.`;
 }
 
 function holdingsForm() {
@@ -644,7 +658,7 @@ function holdingsForm() {
     name: 'holdings',
     rows: 6,
     'aria-label': 'Holdings list',
-    placeholder: 'หุ้น: AAPL\nจำนวนหุ้นคงเหลือ: 10\nต้นทุนต่อหุ้น(USD): 150\nต้นทุนรวม(USD): 1500',
+    placeholder: 'หุ้น: AAPL\nจำนวนหุ้นคงเหลือ: 10\nต้นทุนต่อหุ้น(USD): 150\nต้นทุนรวม(USD): 1500\nมูลค่า(USD): -50',
   });
 
   const submit = (event) => {
@@ -661,7 +675,7 @@ function holdingsForm() {
       .filter((stock) => stock.tradeCount > 0 && !listed.has(stock.ticker))
       .map((stock) => stock.ticker);
     const question = `Save ${rows.length} holdings and mark ${sold.length} other stocks as fully sold?`;
-    if (confirm(question)) {
+    if (confirm(`${question}${unrealizedCheck(rows)}`)) {
       run(() => state.store.replaceHoldings(rows, sold), `${rows.length} holdings saved`);
     }
   };

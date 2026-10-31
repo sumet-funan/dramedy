@@ -58,14 +58,28 @@ const HOLDING_PATTERNS = {
   shares: /^\s*จำนวนหุ้นคงเหลือ\s*:\s*([\d,.]+)\s*$/,
   average: /^\s*ต้นทุนต่อหุ้น\s*\(USD\)\s*:\s*([\d,.]+)\s*$/,
   total: /^\s*ต้นทุนรวม\s*\(USD\)\s*:\s*([\d,.]+)\s*$/,
+  unrealized: /^\s*มูลค่า\s*\(USD\)\s*:\s*([-−+]?[\d,.]+)\s*$/,
 };
 
 // The largest gap between shares × average and the total that rounding can explain.
 const HOLDING_TOLERANCE_USD = 0.05;
 
-const readNumber = (text) => Number(text.replaceAll(',', ''));
+const readNumber = (text) => Number(text.replaceAll(',', '').replace('−', '-'));
 
-// Reads the Thai holdings list, one block of four lines per stock.
+// Despite its name, the broker's "มูลค่า" line is profit or loss on the shares
+// held, not their value. Adding it to the cost gives the value, and so the price.
+const impliedPrice = ({ shares, total, unrealized }) => (
+  Math.round(((total + unrealized) / shares) * 1e6) / 1e6
+);
+
+function holdingRow(block) {
+  const row = { ticker: block.ticker, shares: block.shares, total_cost_usd: block.total };
+  return block.unrealized === undefined
+    ? row
+    : { ...row, current_price_usd: impliedPrice(block) };
+}
+
+// Reads the Thai holdings list, one block of four or five lines per stock.
 export function parseHoldings(text) {
   const blocks = [];
   for (const line of text.split(/\r?\n/)) {
@@ -81,7 +95,7 @@ export function parseHoldings(text) {
 
   const errors = [];
   const seen = new Set();
-  for (const { ticker, shares, average, total } of blocks) {
+  for (const { ticker, shares, average, total, unrealized } of blocks) {
     if (seen.has(ticker)) errors.push(`${ticker} is listed twice`);
     seen.add(ticker);
 
@@ -89,13 +103,12 @@ export function parseHoldings(text) {
     else if (!(total >= 0)) errors.push(`${ticker} has no total cost`);
     else if (average > 0 && Math.abs(shares * average - total) > HOLDING_TOLERANCE_USD) {
       errors.push(`${ticker}: shares × cost per share doesn’t match the total cost`);
+    } else if (Number.isNaN(unrealized) || total + unrealized < 0) {
+      errors.push(`${ticker}: the loss is larger than the total cost`);
     }
   }
 
-  return {
-    rows: blocks.map(({ ticker, shares, total }) => ({ ticker, shares, total_cost_usd: total })),
-    errors,
-  };
+  return { rows: blocks.map(holdingRow), errors };
 }
 
 function parseLine(line) {

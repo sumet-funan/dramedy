@@ -77,6 +77,41 @@ test('handles thousands separators and rounded averages', () => {
   assert.deepEqual(rows, [{ ticker: 'AAA', shares: 1000, total_cost_usd: 1234.5 }]);
 });
 
+const withResult = (block, value) => `${block}\nมูลค่า(USD): ${value}`;
+
+test('works out the price from the profit or loss line', () => {
+  const { rows, errors } = parseHoldings(withResult(holding('AAA', 10, 2.5, 25), -5));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(rows, [{
+    ticker: 'AAA', shares: 10, total_cost_usd: 25, current_price_usd: 2,
+  }]);
+});
+
+test('reads gains, thousands separators and the typographic minus', () => {
+  const read = (value) => parseHoldings(withResult(holding('AAA', 10, 200, 2000), value))
+    .rows[0].current_price_usd;
+  assert.equal(read('1,000'), 300);
+  assert.equal(read('+500'), 250);
+  assert.equal(read('−500'), 150);
+});
+
+test('an implied price gives back the exact value for fractional shares', () => {
+  const [row] = parseHoldings(withResult(holding('AAA', 0.3, 100, 30), -7.77)).rows;
+  assert.equal(Math.round(row.shares * row.current_price_usd * 100), 2223);
+});
+
+test('a list without the line leaves the price out', () => {
+  const [row] = parseHoldings(holding('AAA', 10, 2.5, 25)).rows;
+  assert.equal('current_price_usd' in row, false);
+});
+
+test('rejects a loss larger than the cost', () => {
+  assert.deepEqual(
+    parseHoldings(withResult(holding('AAA', 10, 2.5, 25), -30)).errors,
+    ['AAA: the loss is larger than the total cost'],
+  );
+});
+
 test('flags holdings that do not add up', () => {
   const { errors } = parseHoldings(holding('AAA', 10, 2.5, 99));
   assert.deepEqual(errors, ['AAA: shares × cost per share doesn’t match the total cost']);

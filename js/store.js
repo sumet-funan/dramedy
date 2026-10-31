@@ -6,6 +6,16 @@ const IMPORT_CHUNK = 200;
 const CONFLICT_COLUMNS = 'user_id,occurred_at,type,ticker,amount_usd';
 
 export function createSupabaseStore(client, userId) {
+  async function setPrices(prices) {
+    const price_updated_at = new Date().toISOString();
+    const results = await Promise.all(prices.map(({ ticker, price }) => client
+      .from('holdings')
+      .update({ current_price_usd: price, price_updated_at })
+      .eq('ticker', ticker)));
+    const failed = results.find((result) => result.error);
+    if (failed) throw failed.error;
+  }
+
   async function loadTransactions() {
     const all = [];
     for (let from = 0; ; from += PAGE_SIZE) {
@@ -62,21 +72,16 @@ export function createSupabaseStore(client, userId) {
       }
     },
 
-    async setPrices(prices) {
-      const price_updated_at = new Date().toISOString();
-      const results = await Promise.all(prices.map(({ ticker, price }) => client
-        .from('holdings')
-        .update({ current_price_usd: price, price_updated_at })
-        .eq('ticker', ticker)));
-      const failed = results.find((result) => result.error);
-      if (failed) throw failed.error;
-    },
+    setPrices,
 
     // Replaces the whole list: anything traded but not listed is now fully sold.
+    // Prices are saved separately so a row without one keeps the price it had.
     async replaceHoldings(rows, soldTickers) {
       const now = new Date().toISOString();
       const saved = await client.from('holdings').upsert(
-        rows.map((row) => ({ ...row, user_id: userId, updated_at: now })),
+        rows.map(({ ticker, shares, total_cost_usd }) => ({
+          ticker, shares, total_cost_usd, user_id: userId, updated_at: now,
+        })),
       );
       if (saved.error) throw saved.error;
 
@@ -90,6 +95,10 @@ export function createSupabaseStore(client, userId) {
       ].map((row) => ({ ...row, user_id: userId, updated_at: now }));
       const marked = await client.from('stock_status').upsert(statuses);
       if (marked.error) throw marked.error;
+
+      await setPrices(rows
+        .filter((row) => row.current_price_usd !== undefined)
+        .map((row) => ({ ticker: row.ticker, price: row.current_price_usd })));
     },
 
     // Duplicates are skipped by the database, so re-importing a file is safe.
@@ -137,7 +146,9 @@ export function createDemoStore({ transactions, statuses, holdings }) {
         row.ticker,
         {
           current_price_usd: held[row.ticker]?.current_price_usd ?? null,
-          price_updated_at: held[row.ticker]?.price_updated_at ?? null,
+          price_updated_at: row.current_price_usd === undefined
+            ? held[row.ticker]?.price_updated_at ?? null
+            : updated_at,
           ...row,
           updated_at,
         },
