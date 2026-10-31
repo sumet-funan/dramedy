@@ -42,7 +42,8 @@ npm test
 Holdings can be filled in from screenshots of the broker's portfolio screen, and
 trades from its history screen. The text is read in the browser by Tesseract in
 `vendor/tesseract`, so images are never uploaded, and nothing is saved until the
-rows are checked and submitted.
+rows are checked and submitted. A row the reader doubts blocks saving until the
+doubtful field is changed or the row is marked as checked.
 
 ## Duplicates
 

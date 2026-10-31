@@ -691,12 +691,8 @@ function tradeImport() {
         return;
       }
 
-      const doubtful = rows.filter((row) => row.checkDate || row.checkTicker).length;
       state.tradeDraft = rows;
-      state.tradeNote = [
-        plural('tradeImage.read', rows.length),
-        doubtful > 0 && t('tradeImage.doubtful', { count: doubtful }),
-      ].filter(Boolean).join(' ');
+      state.tradeNote = plural('tradeImage.read', rows.length);
       render();
     } catch (error) {
       show(`${t('image.failed')} ${describeError(error)}`);
@@ -715,22 +711,77 @@ function tradeImport() {
     })));
 }
 
-function reviewRow(entry, onRemove) {
+// A doubt about a row read from an image clears only when a field that settles it
+// changes, or when the viewer says the row is right.
+const CHECKS = {
+  date: { fields: ['date'], text: () => t('tradeImage.checkDate') },
+  ticker: { fields: ['ticker'], text: () => t('tradeImage.checkTicker') },
+  figures: { fields: ['total', 'unrealized'], text: () => t('holdings.checkFigures') },
+  shares: { fields: ['shares'], text: () => t('holdings.checkShares') },
+};
+
+const checksOf = (row) => (row.dataset.checks || '').split(' ').filter(Boolean);
+const unsettled = (row, field) => checksOf(row)
+  .filter((check) => !CHECKS[check].fields.includes(field));
+
+function showChecks(row, checks) {
+  row.dataset.checks = checks.join(' ');
+  row.classList.toggle('bad', checks.length > 0);
+  row.querySelector('.holding-checked').hidden = checks.length === 0;
+  if (checks.length > 0) {
+    const hint = row.querySelector('.holding-hint');
+    hint.textContent = checks.map((check) => CHECKS[check].text()).join(' · ');
+    hint.hidden = false;
+  }
+}
+
+const checkedButton = (onClick) => h('button', {
+  class: 'text-button holding-checked',
+  type: 'button',
+  hidden: true,
+  onClick,
+}, t('check.done'));
+
+const waitingRows = (list) => [...list.children].filter((row) => checksOf(row).length > 0);
+
+// The button stays pressable while rows wait, so it can lead to the next one.
+function showWaiting(list, button, label) {
+  const count = waitingRows(list).length;
+  button.textContent = count > 0 ? plural('check.waiting', count) : label;
+  button.classList.toggle('waiting', count > 0);
+}
+
+function readyToSave(list) {
+  const [next] = waitingRows(list);
+  next?.scrollIntoView({ block: 'center' });
+  return !next;
+}
+
+function reviewRow(entry, onRemove, onChecked) {
   const hint = h('p', { class: 'holding-hint', hidden: true });
   const match = h('p', { class: 'holding-match', hidden: true });
+
+  const settle = (field) => {
+    hint.hidden = true;
+    showChecks(row, unsettled(row, field));
+  };
 
   const refresh = () => {
     const type = fieldOf(row, 'type').value;
     fieldOf(row, 'ticker').hidden = !needsTicker(type);
     fieldOf(row, 'shares').closest('label').hidden = !['buy', 'sell'].includes(type);
+    if (!needsTicker(type)) settle('ticker');
   };
+
+  const checks = entry.checks ?? [
+    entry.checkDate && 'date',
+    entry.checkTicker && 'ticker',
+  ].filter(Boolean);
 
   const row = h('li', {
     class: 'holding',
-    onInput: () => {
-      row.classList.remove('bad');
-      hint.hidden = true;
-    },
+    'data-checks': checks.join(' '),
+    onInput: (event) => settle(event.target.name),
     onChange: refresh,
   },
   h('div', { class: 'holding-head' },
@@ -756,6 +807,11 @@ function reviewRow(entry, onRemove) {
       onClick: () => onRemove(row),
     }, icon('close'))),
   hint,
+  checkedButton(() => {
+    row.dataset.checks = '';
+    settle('');
+    onChecked();
+  }),
   match,
   h('div', { class: 'holding-fields review' },
     holdingField('date', t('form.date'), {
@@ -768,15 +824,7 @@ function reviewRow(entry, onRemove) {
       min: '0', inputmode: 'decimal', placeholder: t('form.optional'), value: entry.shares ?? '',
     })));
 
-  const warning = entry.warning ?? [
-    entry.checkDate && t('tradeImage.checkDate'),
-    entry.checkTicker && t('tradeImage.checkTicker'),
-  ].filter(Boolean).join(' · ');
-  if (warning) {
-    row.classList.add('bad');
-    hint.textContent = warning;
-    hint.hidden = false;
-  }
+  settle('');
   refresh();
   return row;
 }
@@ -785,7 +833,7 @@ const reviewEntry = (row) => ({
   ...Object.fromEntries(
     [...row.querySelectorAll('input, select')].map((field) => [field.name, field.value.trim()]),
   ),
-  warning: row.classList.contains('bad') ? row.querySelector('.holding-hint').textContent : '',
+  checks: checksOf(row),
 });
 
 function reviewedRow(entry) {
@@ -837,7 +885,9 @@ function tradeReview() {
     }
 
     const count = (wanted) => found.filter((match) => match?.kind === wanted).length;
+    const waiting = waitingRows(list).length;
     matches.textContent = [
+      waiting > 0 && t('tradeImage.doubtful', { count: waiting }),
       count('same') > 0 && t('tradeImage.sameCount', { count: count('same') }),
       count('similar') > 0 && t('tradeImage.similarCount', { count: count('similar') }),
     ].filter(Boolean).join(' ');
@@ -851,15 +901,21 @@ function tradeReview() {
       finish();
       render();
     } else {
-      showMatches();
+      showProgress();
     }
   };
 
-  const list = h('ul', {}, state.tradeDraft.map((entry) => reviewRow(entry, removeRow)));
-
   const update = () => {
     saveDraft();
+    showProgress();
+  };
+
+  const list = h('ul', {}, state.tradeDraft.map((entry) => reviewRow(entry, removeRow, update)));
+  const save = h('button', { class: 'capsule wide', type: 'submit' });
+
+  const showProgress = () => {
     showMatches();
+    showWaiting(list, save, t('tradeImage.save'));
   };
 
   const cancel = () => {
@@ -871,6 +927,8 @@ function tradeReview() {
 
   const submit = (event) => {
     event.preventDefault();
+    if (!readyToSave(list)) return;
+
     const items = [...list.children];
     const results = items.map(reviewEntry).map(reviewedRow);
 
@@ -897,11 +955,11 @@ function tradeReview() {
     });
   };
 
-  showMatches();
+  showProgress();
 
   return h('form', { class: 'stack', onSubmit: submit, onInput: update, onChange: update },
     section(null, h('div', { class: 'card' }, note, matches, list), t('tradeImage.footer')),
-    h('button', { class: 'capsule wide', type: 'submit' }, t('tradeImage.save')),
+    save,
     h('button', { class: 'text-button', type: 'button', onClick: cancel }, t('tradeImage.cancel')));
 }
 
@@ -1015,19 +1073,21 @@ function holdingField(name, label, props = {}) {
 const fieldOf = (row, name) => row.querySelector(`[name=${name}]`);
 const tickerOf = (row) => fieldOf(row, 'ticker').value.trim().toUpperCase();
 
-const holdingEntry = (row) => Object.fromEntries(
-  [...row.querySelectorAll('input')].map((input) => [input.name, input.value.trim()]),
-);
+const holdingEntry = (row) => ({
+  ...Object.fromEntries(
+    [...row.querySelectorAll('input')].map((input) => [input.name, input.value.trim()]),
+  ),
+  checks: checksOf(row),
+});
 
-function holdingRow(saved, entry, onRemove) {
+function holdingRow(saved, entry, onRemove, onChecked) {
   const hint = h('p', { class: 'holding-hint', hidden: true });
 
   // A held stock shows its saved figures as placeholders, because leaving a
   // field blank keeps exactly that figure.
-  const refresh = () => {
+  const refresh = (event) => {
     const ticker = tickerOf(row);
     const held = saved[ticker];
-    row.classList.remove('bad');
     hint.hidden = ticker === '';
     hint.textContent = held
       ? t('holdings.heldHint', { shares: held.shares.toLocaleString('en-US') })
@@ -1035,9 +1095,14 @@ function holdingRow(saved, entry, onRemove) {
     fieldOf(row, 'shares').placeholder = held?.shares ?? t('form.required');
     fieldOf(row, 'total').placeholder = held?.total ?? t('form.required');
     fieldOf(row, 'unrealized').placeholder = held?.unrealized ?? RESULT_EXAMPLE;
+    showChecks(row, unsettled(row, event?.target.name));
   };
 
-  const row = h('li', { class: 'holding', onInput: refresh },
+  const row = h('li', {
+    class: 'holding',
+    'data-checks': (entry.checks ?? []).join(' '),
+    onInput: refresh,
+  },
     h('div', { class: 'holding-head' },
       h('input', {
         class: 'holding-ticker',
@@ -1056,6 +1121,11 @@ function holdingRow(saved, entry, onRemove) {
         onClick: () => onRemove(row),
       }, icon('close'))),
     hint,
+    checkedButton(() => {
+      row.dataset.checks = '';
+      refresh();
+      onChecked();
+    }),
     h('div', { class: 'holding-fields' },
       holdingField('shares', t('form.shares'), {
         min: '0', inputmode: 'decimal', value: entry.shares ?? '',
@@ -1091,35 +1161,30 @@ function rowFor(list, ticker, newRow) {
 }
 
 // Fills rows without saving, so a misread figure can be fixed first. The screen
-// has no share counts, so a held stock shows the count already saved. Returns
-// the stocks whose cost moved, because their share count may have moved too.
+// has no share counts, so a held stock shows the count already saved, and a stock
+// whose cost moved is marked because its share count may have moved too.
 function fillHoldings(list, stocks, saved, newRow) {
-  const costChanged = [];
   for (const stock of stocks) {
     const row = rowFor(list, stock.ticker, newRow);
     const held = saved[stock.ticker];
     const moved = held && Math.abs(held.total - stock.total) > COST_TOLERANCE_USD;
 
-    if (moved) costChanged.push(stock.ticker);
     if (held) fieldOf(row, 'shares').value = held.shares;
     fieldOf(row, 'total').value = held && !moved ? held.total : stock.total;
     fieldOf(row, 'unrealized').value = stock.unrealized;
+    row.dataset.checks = [!stock.agrees && 'figures', moved && 'shares'].filter(Boolean).join(' ');
     fieldOf(row, 'ticker').dispatchEvent(new Event('input', { bubbles: true }));
   }
-  return costChanged;
 }
 
-function imageSummary(stocks, costChanged, saved) {
+function imageSummary(stocks, saved) {
   const read = new Set(stocks.map((stock) => stock.ticker));
   const unread = Object.keys(saved).filter((ticker) => !read.has(ticker));
   const brandNew = stocks.filter((stock) => !saved[stock.ticker]).map((stock) => stock.ticker);
-  const doubtful = stocks.filter((stock) => !stock.agrees).map((stock) => stock.ticker);
   const mention = (key, tickers) => tickers.length > 0 && t(key, { tickers: tickers.join(', ') });
 
   return [
     plural('image.read', stocks.length),
-    mention('image.doubtful', doubtful),
-    mention('image.costChanged', costChanged),
     mention('image.brandNew', brandNew),
     mention('image.unread', unread),
   ].filter(Boolean).join(' ');
@@ -1154,6 +1219,7 @@ function holdingsForm() {
 
   const saveDraft = () => {
     state.holdingDraft = [...list.children].map(holdingEntry);
+    showWaiting(list, save, t('holdings.save'));
   };
 
   const note = h('p', {
@@ -1175,9 +1241,10 @@ function holdingsForm() {
     saveDraft();
   };
 
-  const newRow = (entry) => holdingRow(saved, entry, removeRow);
+  const newRow = (entry) => holdingRow(saved, entry, removeRow, saveDraft);
   const start = state.holdingDraft.length > 0 ? state.holdingDraft : [{}];
   const list = h('ul', {}, start.map(newRow));
+  const save = h('button', { class: 'capsule wide', type: 'submit' });
 
   const addRow = () => {
     const row = newRow({});
@@ -1199,9 +1266,8 @@ function holdingsForm() {
       const stocks = [...new Map(
         texts.flatMap(readPortfolio).map((stock) => [stock.ticker, stock]),
       ).values()];
-      show(stocks.length > 0
-        ? imageSummary(stocks, fillHoldings(list, stocks, saved, newRow), saved)
-        : t('image.none'));
+      fillHoldings(list, stocks, saved, newRow);
+      show(stocks.length > 0 ? imageSummary(stocks, saved) : t('image.none'));
     } catch (error) {
       show(`${t('image.failed')} ${describeError(error)}`);
     }
@@ -1220,6 +1286,8 @@ function holdingsForm() {
 
   const submit = (event) => {
     event.preventDefault();
+    if (!readyToSave(list)) return;
+
     const entries = [...list.children].map(holdingEntry);
     const { rows, errors, problems } = readHoldings(entries, saved);
 
@@ -1241,6 +1309,8 @@ function holdingsForm() {
     }
   };
 
+  showWaiting(list, save, t('holdings.save'));
+
   return h('form', { class: 'stack', onSubmit: submit, onInput: saveDraft },
     section(null, h('div', { class: 'card' },
       list,
@@ -1255,7 +1325,7 @@ function holdingsForm() {
         onChange: importImages,
       }))),
     t('holdings.footer')),
-    h('button', { class: 'capsule wide', type: 'submit' }, t('holdings.save')));
+    save);
 }
 
 function passwordForm() {

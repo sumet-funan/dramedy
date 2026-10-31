@@ -856,6 +856,12 @@ label.row:focus-within {
   width: 100%;
 }
 
+.capsule.waiting {
+  background: var(--fill);
+  box-shadow: none;
+  color: var(--ink);
+}
+
 /* Forms */
 .form-row {
   display: flex;
@@ -1267,6 +1273,16 @@ label.row:focus-within {
   margin-bottom: 4px;
   font-size: 13px;
   color: var(--ink-3);
+}
+
+.holding-checked {
+  display: block;
+  min-height: 44px;
+  font-size: 15px;
+}
+
+.holding-checked[hidden] {
+  display: none;
 }
 
 .holding-match {
