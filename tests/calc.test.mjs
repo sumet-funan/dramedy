@@ -193,6 +193,40 @@ test('profit ties to cash: cash + invested - money added', () => {
   assert.equal(s.totalProfit, s.cash + s.stillInvested - s.moneyAdded);
 });
 
+test('a price gives market value and unrealized profit', () => {
+  const rows = [tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -300.5)];
+  const holding = { ...held(100, 300), current_price_usd: 2.5, price_updated_at: '2026-12-01T00:00:00Z' };
+  const result = summarize(rows, {}, { AAA: holding });
+  const [stock] = result.stocks;
+  assert.equal(stock.marketValue, 25000);
+  assert.equal(stock.unrealized, -5000);
+  assert.equal(result.marketValue, 25000);
+  assert.equal(result.unrealized, -5000);
+  assert.equal(result.pricedCount, 1);
+});
+
+test('unrealized profit stays out of total profit', () => {
+  const rows = [tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -300)];
+  const holding = { ...held(100, 300), current_price_usd: 5 };
+  assert.equal(summarize(rows, {}, { AAA: holding }).totalProfit, 0);
+});
+
+test('a price of zero counts, but a missing price does not', () => {
+  const rows = [
+    tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -100),
+    tx('2026-01-01T10:00:00Z', 'buy', 'BBB', -100),
+  ];
+  const result = summarize(rows, {}, {
+    AAA: { ...held(1, 100), current_price_usd: 0 },
+    BBB: { ...held(1, 100), current_price_usd: null },
+  });
+  assert.equal(result.stocks[0].unrealized, -10000);
+  assert.equal(result.stocks[1].unrealized, null);
+  assert.equal(result.heldCount, 2);
+  assert.equal(result.pricedCount, 1);
+  assert.equal(result.unrealized, -10000);
+});
+
 test('rows are processed by time whatever order they arrive in', () => {
   const rows = [
     tx('2026-02-01T10:00:00Z', 'sell', 'AAA', 150, 10),

@@ -8,7 +8,14 @@ const row = (id, occurred_at, type, ticker, amount_usd, shares = null) => ({
 export const demoData = {
   statuses: { ALFA: 'sold', BRVO: 'sold' },
   holdings: {
-    ECHO: { ticker: 'ECHO', shares: 12, total_cost_usd: 419.4, updated_at: '2026-09-02T00:00:00Z' },
+    ECHO: {
+      ticker: 'ECHO',
+      shares: 12,
+      total_cost_usd: 419.4,
+      updated_at: '2026-09-02T00:00:00Z',
+      current_price_usd: 41.5,
+      price_updated_at: '2026-09-02T00:00:00Z',
+    },
   },
   transactions: [
     row(1, '2026-03-02T02:00:00Z', 'deposit', '', 2000),

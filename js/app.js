@@ -107,6 +107,15 @@ const longMonthFormat = new Intl.DateTimeFormat('en-GB', {
   month: 'long',
   year: 'numeric',
 });
+const dayFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Bangkok',
+  day: 'numeric',
+  month: 'short',
+});
+const priceText = (price) => `$${price.toLocaleString('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+})}`;
 const monthDate = (key) => new Date(`${key}-01T00:00:00Z`);
 const monthLabel = (key) => monthFormat.format(monthDate(key));
 
@@ -240,6 +249,12 @@ function emptyState() {
     h('button', { class: 'capsule', type: 'button', onClick: () => goTo('more') }, 'Import trades'));
 }
 
+function pricedHint(s) {
+  return s.pricedCount === s.heldCount
+    ? 'All stocks priced'
+    : `${s.pricedCount} of ${s.heldCount} stocks priced`;
+}
+
 function renderOverview() {
   const s = state.summary;
   if (state.transactions.length === 0) return emptyState();
@@ -267,7 +282,17 @@ function renderOverview() {
 
     h('section', { class: 'tiles' },
       tile('Realized', signedMoney(s.realized), 'Profit taken so far'),
-      tile('Still invested', money(s.stillInvested), 'Not yet returned'),
+      s.heldCount > 0 && tile(
+        'Unrealized',
+        s.pricedCount > 0 ? signedMoney(s.unrealized) : '—',
+        pricedHint(s),
+      ),
+      s.heldCount > 0 && tile(
+        'Market value',
+        s.pricedCount > 0 ? money(s.marketValue) : '—',
+        pricedHint(s),
+      ),
+      tile('Still invested', money(s.stillInvested), 'At cost'),
       tile('Cash balance', money(s.cash), 'From your rows'),
       tile('Money added', money(s.moneyAdded), 'Deposits and exchanges'),
       tile('Dividends', signedMoney(s.dividends + s.tax), 'After tax'),
@@ -304,11 +329,19 @@ function heldFacts(stock) {
   return `${shares} shares · ${money(Math.round(stock.costLeft / stock.sharesHeld))} avg cost`;
 }
 
+function priceFacts(stock) {
+  if (stock.price === null) return 'Add a price in More to see unrealized profit';
+  const day = stock.priceUpdatedAt ? ` on ${dayFormat.format(new Date(stock.priceUpdatedAt))}` : '';
+  return `${priceText(stock.price)} price${day} · ${money(stock.marketValue)} value`;
+}
+
 function stockAmounts(stock) {
   if (stock.fromHolding) {
+    const hasPrice = stock.unrealized !== null;
     return [
-      h('span', { class: 'row-amount' }, money(stock.costLeft)),
-      h('span', { class: 'row-subtitle' }, 'Invested'),
+      h('span', { class: `row-amount ${hasPrice ? toneOf(stock.unrealized) : ''}` },
+        hasPrice ? signedMoney(stock.unrealized) : money(stock.costLeft)),
+      h('span', { class: 'row-subtitle' }, hasPrice ? 'Unrealized' : 'Invested'),
       stock.realized !== null && h('span', { class: `row-amount small ${toneOf(stock.realized)}` },
         signedMoney(stock.realized)),
       stock.realized !== null && h('span', { class: 'row-subtitle' }, 'Realized'),
@@ -332,6 +365,7 @@ function stockRow(stock) {
     h('div', { class: 'row-main' },
       h('span', { class: 'row-title' }, stock.ticker),
       stock.fromHolding && h('span', { class: 'row-subtitle strong' }, heldFacts(stock)),
+      stock.fromHolding && h('span', { class: 'row-subtitle' }, priceFacts(stock)),
       h('span', { class: 'row-subtitle' }, trades),
       usesTradeShares && h('span', { class: 'row-subtitle' },
         `${stock.sharesHeld.toLocaleString('en-US')} shares held`),
@@ -564,6 +598,46 @@ async function importFile(event) {
   );
 }
 
+function pricesForm() {
+  const held = state.summary.stocks.filter((stock) => stock.fromHolding);
+  if (held.length === 0) return null;
+
+  const submit = (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    const changes = held
+      .map((stock) => {
+        const text = String(form.get(stock.ticker)).trim();
+        return { ticker: stock.ticker, price: text === '' ? null : Number(text), before: stock.price };
+      })
+      .filter(({ price, before }) => price !== before);
+
+    if (changes.length === 0) {
+      setNotice('good', 'No prices changed');
+      render();
+      return;
+    }
+    run(
+      () => state.store.setPrices(changes),
+      `${changes.length} ${changes.length === 1 ? 'price' : 'prices'} saved`,
+    );
+  };
+
+  return section('Current prices', h('form', { class: 'card', onSubmit: submit },
+    held.map((stock) => formRow(stock.ticker, h('input', {
+      name: stock.ticker,
+      type: 'number',
+      step: 'any',
+      min: '0',
+      inputmode: 'decimal',
+      placeholder: 'Price',
+      value: stock.price ?? '',
+      'aria-label': `Current price of ${stock.ticker}`,
+    }))),
+    h('button', { class: 'row row-button action', type: 'submit' }, 'Save Prices')),
+  'Prices don’t update by themselves. Enter them from Dime whenever you want a fresh view.');
+}
+
 function holdingsForm() {
   const box = h('textarea', {
     class: 'paste-box',
@@ -627,6 +701,7 @@ function passwordForm() {
 
 function renderMore() {
   return h('div', { class: 'stack' },
+    pricesForm(),
     holdingsForm(),
     section('Your data', h('div', { class: 'card' },
       h('label', { class: 'row row-button' },

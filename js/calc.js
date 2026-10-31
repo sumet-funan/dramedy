@@ -80,6 +80,10 @@ function holdingResult(trades, bought, sold, holding) {
   const costLeft = toCents(holding.total_cost_usd);
   const lastTrade = trades.at(-1);
   const lastSale = trades.filter((t) => t.type === 'sell').at(-1) ?? lastTrade;
+  const price = holding.current_price_usd ?? null;
+  const marketValue = price === null
+    ? null
+    : Math.round(Number(holding.shares) * Number(price) * 100);
 
   return {
     exact: true,
@@ -88,6 +92,10 @@ function holdingResult(trades, bought, sold, holding) {
     status: 'holding',
     sharesHeld: Number(holding.shares),
     costLeft,
+    price: price === null ? null : Number(price),
+    priceUpdatedAt: holding.price_updated_at ?? null,
+    marketValue,
+    unrealized: marketValue === null ? null : marketValue - costLeft,
     updatedAt: holding.updated_at,
     outdated: Boolean(lastTrade)
       && Date.parse(lastTrade.occurred_at) > Date.parse(holding.updated_at),
@@ -167,11 +175,17 @@ export function summarize(transactions, statuses = {}, holdings = {}) {
     .sort((a, b) => a.month.localeCompare(b.month));
 
   const realized = stocks.reduce((sum, s) => sum + (s.realized ?? 0), 0);
+  const held = stocks.filter((s) => s.fromHolding);
+  const priced = held.filter((s) => s.marketValue !== null);
   return {
     ...totals,
     stocks,
     monthly,
     realized,
+    heldCount: held.length,
+    pricedCount: priced.length,
+    marketValue: priced.reduce((sum, s) => sum + s.marketValue, 0),
+    unrealized: priced.reduce((sum, s) => sum + s.unrealized, 0),
     stillInvested: stocks.reduce((sum, s) => sum + s.costLeft, 0),
     needsReview: stocks.filter((s) => s.status === 'review').length,
     totalProfit: realized + totals.dividends + totals.tax + totals.fees + totals.refunds,

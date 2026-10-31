@@ -25,7 +25,8 @@ export function createSupabaseStore(client, userId) {
       const transactions = await loadTransactions();
       const [statusResult, holdingResult] = await Promise.all([
         client.from('stock_status').select('ticker, status'),
-        client.from('holdings').select('ticker, shares, total_cost_usd, updated_at'),
+        client.from('holdings')
+          .select('ticker, shares, total_cost_usd, updated_at, current_price_usd, price_updated_at'),
       ]);
       if (statusResult.error) throw statusResult.error;
       if (holdingResult.error) throw holdingResult.error;
@@ -59,6 +60,16 @@ export function createSupabaseStore(client, userId) {
         const removal = await client.from('holdings').delete().eq('ticker', ticker);
         if (removal.error) throw removal.error;
       }
+    },
+
+    async setPrices(prices) {
+      const price_updated_at = new Date().toISOString();
+      const results = await Promise.all(prices.map(({ ticker, price }) => client
+        .from('holdings')
+        .update({ current_price_usd: price, price_updated_at })
+        .eq('ticker', ticker)));
+      const failed = results.find((result) => result.error);
+      if (failed) throw failed.error;
     },
 
     // Replaces the whole list: anything traded but not listed is now fully sold.
@@ -114,9 +125,23 @@ export function createDemoStore({ transactions, statuses, holdings }) {
         holdings: { ...held },
       };
     },
+    async setPrices(prices) {
+      const price_updated_at = new Date().toISOString();
+      prices.forEach(({ ticker, price }) => {
+        held[ticker] = { ...held[ticker], current_price_usd: price, price_updated_at };
+      });
+    },
     async replaceHoldings(listed, soldTickers) {
       const updated_at = new Date().toISOString();
-      held = Object.fromEntries(listed.map((row) => [row.ticker, { ...row, updated_at }]));
+      held = Object.fromEntries(listed.map((row) => [
+        row.ticker,
+        {
+          current_price_usd: held[row.ticker]?.current_price_usd ?? null,
+          price_updated_at: held[row.ticker]?.price_updated_at ?? null,
+          ...row,
+          updated_at,
+        },
+      ]));
       listed.forEach((row) => { chosen[row.ticker] = 'holding'; });
       soldTickers.forEach((ticker) => { chosen[ticker] = 'sold'; });
     },
