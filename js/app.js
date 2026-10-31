@@ -426,7 +426,7 @@ function stockRow(stock) {
       stock.fromHolding && h('span', { class: 'row-subtitle strong' }, heldFacts(stock)),
       stock.fromHolding && h('span', { class: 'row-subtitle' }, priceFacts(stock)),
       h('span', { class: 'row-subtitle' }, trades),
-      usesTradeShares && h('span', { class: 'row-subtitle' },
+      usesTradeShares && stock.sharesHeld > 0 && h('span', { class: 'row-subtitle' },
         t('stock.sharesHeld', { shares: stock.sharesHeld.toLocaleString('en-US') })),
       stock.oversold && h('span', { class: 'row-warning' },
         icon('alert'), t('stock.oversold')),
@@ -629,13 +629,15 @@ function tradeForm() {
     step: 'any',
     min: '0',
     inputmode: 'decimal',
-    placeholder: t('form.optional'),
+    placeholder: t('form.required'),
   }));
 
   const syncFields = (type) => {
     ticker.hidden = !needsTicker(type);
     ticker.querySelector('input').required = needsTicker(type);
+    // Holdings carry on from each trade, which takes a share count.
     shares.hidden = !['buy', 'sell'].includes(type);
+    shares.querySelector('input').required = !shares.hidden;
   };
   syncFields('buy');
 

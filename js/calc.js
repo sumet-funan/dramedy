@@ -14,10 +14,19 @@ export const monthOf = (iso) =>
 
 const byTime = (a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at);
 
-// With share counts on every trade, profit is exact per sale using average cost.
-function averageCostResult(trades) {
-  let shares = 0;
-  let cost = 0;
+const tradeTotals = (trades) => ({
+  bought: trades
+    .filter((t) => t.type === 'buy')
+    .reduce((sum, t) => sum - toCents(t.amount_usd), 0),
+  sold: trades
+    .filter((t) => t.type === 'sell')
+    .reduce((sum, t) => sum + toCents(t.amount_usd), 0),
+});
+
+// With share counts, profit is exact per sale using average cost.
+function applyTrades(trades, startShares = 0, startCost = 0) {
+  let shares = startShares;
+  let cost = startCost;
   let oversold = false;
   const sales = [];
 
@@ -43,6 +52,11 @@ function averageCostResult(trades) {
     }
   }
 
+  return { shares, cost, oversold, sales };
+}
+
+function averageCostResult(trades) {
+  const { shares, cost, oversold, sales } = applyTrades(trades);
   return {
     exact: true,
     oversold,
@@ -75,45 +89,65 @@ function cashFlowResult(trades, bought, sold, chosenStatus) {
 // The broker's own figures for what is still held make profit exact: whatever
 // isn't in the remaining cost has been realized. Commission paid on shares still
 // held is part of that, because the broker's cost leaves it out. It is dated to
-// the latest sale, or the latest trade if nothing has been sold.
-function holdingResult(trades, bought, sold, holding) {
-  const costLeft = toCents(holding.total_cost_usd);
-  const lastTrade = trades.at(-1);
-  const lastSale = trades.filter((t) => t.type === 'sell').at(-1) ?? lastTrade;
+// the latest sale, or the latest trade if nothing has been sold. Trades made since
+// those figures carry on from them, which needs a share count on each one.
+function holdingResult(trades, holding) {
+  const takenAt = Date.parse(holding.updated_at);
+  const later = trades.filter((t) => Date.parse(t.occurred_at) > takenAt);
+  const carriesOn = later.every((t) => Number(t.shares) > 0);
+  const known = carriesOn ? trades.filter((t) => !later.includes(t)) : trades;
+
+  const startCost = toCents(holding.total_cost_usd);
+  const { bought, sold } = tradeTotals(known);
+  const lastSale = known.filter((t) => t.type === 'sell').at(-1) ?? known.at(-1);
+  const opening = lastSale
+    ? [{ month: monthOf(lastSale.occurred_at), cents: sold + startCost - bought }]
+    : [];
+
+  const { shares, cost, oversold, sales } = applyTrades(
+    carriesOn ? later : [],
+    Number(holding.shares),
+    startCost,
+  );
+
+  if (shares === 0) {
+    return {
+      exact: true,
+      oversold,
+      status: 'sold',
+      sharesHeld: 0,
+      costLeft: 0,
+      sales: [...opening, ...sales],
+    };
+  }
+
+  const costLeft = Math.round(cost);
   const price = holding.current_price_usd ?? null;
-  const marketValue = price === null
-    ? null
-    : Math.round(Number(holding.shares) * Number(price) * 100);
+  const marketValue = price === null ? null : Math.round(shares * Number(price) * 100);
 
   return {
     exact: true,
     fromHolding: true,
-    oversold: false,
+    oversold,
     status: 'holding',
-    sharesHeld: Number(holding.shares),
+    sharesHeld: shares,
     costLeft,
     price: price === null ? null : Number(price),
     priceUpdatedAt: holding.price_updated_at ?? null,
     marketValue,
     unrealized: marketValue === null ? null : marketValue - costLeft,
     updatedAt: holding.updated_at,
-    outdated: Boolean(lastTrade)
-      && Date.parse(lastTrade.occurred_at) > Date.parse(holding.updated_at),
-    sales: lastSale
-      ? [{ month: monthOf(lastSale.occurred_at), cents: sold + costLeft - bought }]
-      : [],
+    outdated: !carriesOn,
+    sales: [...opening, ...sales],
   };
 }
 
 function summarizeStock(ticker, trades, chosenStatus, holding) {
-  const buys = trades.filter((t) => t.type === 'buy');
-  const sells = trades.filter((t) => t.type === 'sell');
-  const bought = buys.reduce((sum, t) => sum - toCents(t.amount_usd), 0);
-  const sold = sells.reduce((sum, t) => sum + toCents(t.amount_usd), 0);
+  const { bought, sold } = tradeTotals(trades);
   const hasAllShares = trades.every((t) => Number(t.shares) > 0);
 
   let result;
-  if (holding) result = holdingResult(trades, bought, sold, holding);
+  if (holding) result = holdingResult(trades, holding);
   else if (hasAllShares) result = averageCostResult(trades);
   else result = cashFlowResult(trades, bought, sold, chosenStatus);
 

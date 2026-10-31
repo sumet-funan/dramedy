@@ -193,6 +193,84 @@ test('profit ties to cash: cash + invested - money added', () => {
   assert.equal(s.totalProfit, s.cash + s.stillInvested - s.moneyAdded);
 });
 
+const opening = [
+  tx('2026-01-01T00:00:00Z', 'deposit', '', 1000),
+  tx('2026-01-02T00:00:00Z', 'buy', 'AAA', -100),
+];
+const snapshot = { AAA: { ...held(10, 100, '2026-02-01T00:00:00Z'), current_price_usd: 12 } };
+const later = (type, amount, shares) => tx('2026-03-01T00:00:00Z', type, 'AAA', amount, shares);
+
+test('a later buy adds to the holding and stays out of profit', () => {
+  const s = summarize([...opening, later('buy', -60, 5)], {}, snapshot);
+  const [stock] = s.stocks;
+  assert.equal(stock.sharesHeld, 15);
+  assert.equal(stock.costLeft, 16000);
+  assert.equal(stock.marketValue, 18000);
+  assert.equal(stock.unrealized, 2000);
+  assert.equal(stock.outdated, false);
+  assert.equal(s.realized, 0);
+});
+
+test('a later sale takes average cost out and its profit is dated to the sale', () => {
+  const s = summarize([...opening, later('sell', 48, 4)], {}, snapshot);
+  const [stock] = s.stocks;
+  assert.equal(stock.sharesHeld, 6);
+  assert.equal(stock.costLeft, 6000);
+  assert.equal(stock.unrealized, 1200);
+  assert.equal(s.realized, 800);
+  assert.deepEqual(s.monthly, [{ month: '2026-01', cents: 0 }, { month: '2026-03', cents: 800 }]);
+});
+
+test('selling everything later closes the holding', () => {
+  const s = summarize([...opening, later('sell', 120, 10)], {}, snapshot);
+  const [stock] = s.stocks;
+  assert.equal(stock.status, 'sold');
+  assert.equal(stock.fromHolding, undefined);
+  assert.equal(stock.costLeft, 0);
+  assert.equal(s.realized, 2000);
+  assert.equal(s.heldCount, 0);
+  assert.equal(s.unrealized, 0);
+});
+
+test('buying again after selling everything holds the new shares', () => {
+  const rows = [
+    ...opening,
+    later('sell', 120, 10),
+    tx('2026-04-01T00:00:00Z', 'buy', 'AAA', -30, 3),
+  ];
+  const [stock] = summarize(rows, {}, snapshot).stocks;
+  assert.equal(stock.status, 'holding');
+  assert.equal(stock.sharesHeld, 3);
+  assert.equal(stock.costLeft, 3000);
+  assert.equal(stock.realized, 2000);
+});
+
+test('selling more than held later is flagged', () => {
+  const [stock] = summarize([...opening, later('sell', 150, 12)], {}, snapshot).stocks;
+  assert.equal(stock.oversold, true);
+});
+
+test('later trades keep the tie to cash and the account value', () => {
+  const rows = [...opening, later('buy', -60, 5), tx('2026-04-01T00:00:00Z', 'sell', 'AAA', 70, 6)];
+  const s = summarize(rows, {}, snapshot);
+  assert.equal(s.totalProfit, s.cash + s.stillInvested - s.moneyAdded);
+  assert.equal(s.overall, s.cash + s.marketValue - s.moneyAdded);
+});
+
+test('a later trade with no share count leaves the holding and marks it outdated', () => {
+  const [stock] = summarize([...opening, later('buy', -60)], {}, snapshot).stocks;
+  assert.equal(stock.sharesHeld, 10);
+  assert.equal(stock.costLeft, 10000);
+  assert.equal(stock.outdated, true);
+});
+
+test('a trade before the holding date is already in the figures', () => {
+  const rows = [...opening, tx('2026-01-20T00:00:00Z', 'buy', 'AAA', -60, 5)];
+  const [stock] = summarize(rows, {}, snapshot).stocks;
+  assert.equal(stock.sharesHeld, 10);
+  assert.equal(stock.costLeft, 10000);
+});
+
 test('a price gives market value and unrealized profit', () => {
   const rows = [tx('2026-01-01T10:00:00Z', 'buy', 'AAA', -300.5)];
   const holding = { ...held(100, 300), current_price_usd: 2.5, price_updated_at: '2026-12-01T00:00:00Z' };

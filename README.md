@@ -33,6 +33,8 @@ npm test
 - With share counts on every trade of a stock, profit uses average cost per sale.
 - Without them, profit is known only once a stock is marked fully sold: everything
   received minus everything paid, dated to the final sale.
+- The broker's holdings figures make profit exact for stocks still held. Trades
+  made after those figures carry on from them, using average cost per sale.
 - Deposits, withdrawals and currency exchanges never count as profit.
 
 ## Reading screenshots

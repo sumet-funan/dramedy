@@ -102,7 +102,7 @@ export const messages = {
     'stock.trades': 'Bought {bought} · Sold {sold}',
     'stock.sharesHeld': '{shares} shares held',
     'stock.oversold': 'More shares sold than bought. A buy may be missing.',
-    'stock.outdated': 'Traded since this holding was updated',
+    'stock.outdated': 'A trade has no share count, so update this in Holdings',
     'stock.fromShares': 'Status comes from your share counts',
 
     'filter.label': 'Filter stocks',
@@ -311,7 +311,7 @@ export const messages = {
     'stock.trades': 'ซื้อ {bought} · ขาย {sold}',
     'stock.sharesHeld': 'ถืออยู่ {shares} หุ้น',
     'stock.oversold': 'ขายมากกว่าที่ซื้อ อาจมีรายการซื้อตกหล่น',
-    'stock.outdated': 'มีการซื้อขายหลังอัปเดตหุ้นที่ถืออยู่',
+    'stock.outdated': 'มีรายการที่ไม่มีจำนวนหุ้น โปรดอัปเดตในหุ้นที่ถืออยู่',
     'stock.fromShares': 'สถานะคำนวณจากจำนวนหุ้น',
 
     'filter.label': 'กรองหุ้น',

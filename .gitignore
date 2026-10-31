@@ -2,6 +2,7 @@
 *.jpg
 *.jpeg
 *.png
+!apple-touch-icon.png
 *.csv
 private/
 .env*
