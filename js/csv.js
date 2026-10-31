@@ -111,11 +111,26 @@ const PERCENT_TOLERANCE = 0.1;
 const readAmount = (text) => Number(text.replaceAll(',', ''));
 const roundCents = (value) => Math.round(value * 100) / 100;
 
-// The screen shows value, gain or loss and percentage, so a misread figure or a
-// lost minus sign leaves the three disagreeing.
+// The screen shows value, gain or loss and percentage, so a misread figure leaves
+// the three disagreeing.
 function figuresAgree({ value, unrealized, percent }) {
   const cost = value - unrealized;
   return cost > 0 && Math.abs((unrealized / cost) * 100 - percent) <= PERCENT_TOLERANCE;
+}
+
+// Small minus signs on pale text get lost, and only one sign can make the three
+// figures agree, so a lost one is put back. A minus read anywhere goes first
+// because very small changes fit either sign.
+function settleSign({ value, unrealized, percent }) {
+  const signs = unrealized < 0 || percent < 0 ? [-1, 1] : [1, -1];
+  const sign = signs.find((candidate) => figuresAgree({
+    value,
+    unrealized: candidate * Math.abs(unrealized),
+    percent: candidate * Math.abs(percent),
+  }));
+  return sign
+    ? { unrealized: sign * Math.abs(unrealized), agrees: true }
+    : { unrealized, agrees: false };
 }
 
 // Reads the broker's portfolio screen, where each stock takes two lines. The
@@ -130,13 +145,12 @@ export function readPortfolio(text) {
     if (stock) {
       open = { ticker: stock[1], value: readAmount(stock[2]), percent: readAmount(stock[3]) };
     } else if (result && open) {
-      const unrealized = readAmount(result[1]);
-      const figures = { ...open, unrealized };
+      const { unrealized, agrees } = settleSign({ ...open, unrealized: readAmount(result[1]) });
       stocks.push({
         ticker: open.ticker,
         unrealized,
         total: roundCents(open.value - unrealized),
-        agrees: figuresAgree(figures),
+        agrees,
       });
       open = null;
     }

@@ -166,9 +166,29 @@ test('reads gains and thousands separators', () => {
   });
 });
 
-test('flags a misread figure or a lost minus sign', () => {
-  assert.equal(readPortfolio(screen('AAA 300.00 N -25.00%', '-180.00'))[0].agrees, false);
-  assert.equal(readPortfolio(screen('AAA 300.00 N 25.00%', '100.00'))[0].agrees, false);
+test('flags a misread figure', () => {
+  const [stock] = readPortfolio(screen('AAA 312.00 N -25.00%', '-187.00'));
+  assert.equal(stock.agrees, false);
+  assert.equal(stock.unrealized, -187);
+});
+
+test('puts back a lost minus sign, wherever it was lost', () => {
+  const loss = { ticker: 'AAA', unrealized: -104, total: 416, agrees: true };
+  assert.deepEqual(readPortfolio(screen('AAA 312.00 N -25.00%', '104.00'))[0], loss);
+  assert.deepEqual(readPortfolio(screen('AAA 312.00 N 25.00%', '-104.00'))[0], loss);
+  assert.deepEqual(readPortfolio(screen('AAA 312.00 N 25.00%', '104.00'))[0], loss);
+});
+
+test('a gain with a stray minus sign stays a gain', () => {
+  const [stock] = readPortfolio(screen('AAA 416.00 N -33.33%', '104.00'));
+  assert.deepEqual(stock, {
+    ticker: 'AAA', unrealized: 104, total: 312, agrees: true,
+  });
+});
+
+test('a very small change keeps a minus sign read on either figure', () => {
+  const [stock] = readPortfolio(screen('AAA 52.00 N -0.38%', '0.20'));
+  assert.equal(stock.unrealized, -0.2);
 });
 
 test('skips the page header and a stock cut off by the screen edge', () => {
