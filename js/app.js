@@ -15,6 +15,7 @@ import {
 import { icon } from './icons.js';
 import { readTradeImages } from './ocr.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
+import { matchesPeriod, periodOptions, settlePeriod } from './trade-filter.js';
 import { readTradeRows } from './trade-screen.js';
 
 const TRADE_TYPES = [
@@ -71,6 +72,9 @@ const state = {
   readingImages: false,
   tradeSearch: '',
   tradeType: '',
+  tradeYear: '',
+  tradeMonth: '',
+  tradeDay: '',
   openTrade: null,
   transactions: [],
   statuses: {},
@@ -131,6 +135,8 @@ function makeFormats() {
     }),
     month: new Intl.DateTimeFormat(locale, { timeZone: 'UTC', month: 'short', year: 'numeric' }),
     longMonth: new Intl.DateTimeFormat(locale, { timeZone: 'UTC', month: 'long', year: 'numeric' }),
+    yearOnly: new Intl.DateTimeFormat(locale, { timeZone: 'UTC', year: 'numeric' }),
+    monthOnly: new Intl.DateTimeFormat(locale, { timeZone: 'UTC', month: 'long' }),
     day: new Intl.DateTimeFormat(locale, {
       timeZone: 'Asia/Bangkok',
       day: 'numeric',
@@ -190,6 +196,9 @@ function clearAccount() {
     manualTrade: null,
     tradeSearch: '',
     tradeType: '',
+    tradeYear: '',
+    tradeMonth: '',
+    tradeDay: '',
     openTrade: null,
     transactions: [],
     statuses: {},
@@ -572,9 +581,15 @@ function renderStocks() {
       : h('div', { class: 'card card-note' }, t('filter.empty')));
 }
 
+const tradePeriod = () => ({
+  year: state.tradeYear, month: state.tradeMonth, day: state.tradeDay,
+});
+
 function matchesTradeFilters(tx) {
   const search = state.tradeSearch.trim().toUpperCase();
-  return (!search || tx.ticker.includes(search)) && (!state.tradeType || tx.type === state.tradeType);
+  return (!search || tx.ticker.includes(search))
+    && (!state.tradeType || tx.type === state.tradeType)
+    && matchesPeriod(tx, tradePeriod());
 }
 
 function tradeRow(tx, rerender) {
@@ -615,7 +630,8 @@ function tradeRow(tx, rerender) {
 
 function renderTradeList(container) {
   const groups = new Map();
-  for (const tx of state.transactions.filter(matchesTradeFilters)) {
+  const matching = state.transactions.filter(matchesTradeFilters);
+  for (const tx of matching) {
     const month = monthOf(tx.occurred_at);
     if (!groups.has(month)) groups.set(month, []);
     groups.get(month).push(tx);
@@ -627,14 +643,83 @@ function renderTradeList(container) {
   }
 
   const rerender = () => renderTradeList(container);
-  container.replaceChildren(...[...groups].map(([month, rows]) => section(
-    formats.longMonth.format(monthDate(month)),
-    h('ul', { class: 'card' }, rows.map((tx) => tradeRow(tx, rerender))),
-  )));
+  container.replaceChildren(
+    h('p', { class: 'trade-count', role: 'status' }, plural('trade.count', matching.length)),
+    ...[...groups].map(([month, rows]) => section(
+      formats.longMonth.format(monthDate(month)),
+      h('ul', { class: 'card' }, rows.map((tx) => tradeRow(tx, rerender))),
+    )),
+  );
+}
+
+function periodSelect(label, allLabel, options, current, labelOf, pick) {
+  return h('select', {
+    class: 'pill-select',
+    'aria-label': label,
+    disabled: options.length === 0,
+    onChange: (event) => pick(event.target.value),
+  },
+  h('option', { value: '' }, allLabel),
+  options.map((value) => h('option', {
+    value,
+    selected: value === current,
+  }, labelOf(value))));
+}
+
+function tradeDateFilters(results) {
+  const filters = h('div', { class: 'date-filters' });
+
+  const pick = (changes) => {
+    Object.assign(state, changes);
+    show();
+    renderTradeList(results);
+  };
+
+  const show = () => {
+    const { year, month, day } = settlePeriod(tradePeriod(), state.transactions);
+    Object.assign(state, { tradeYear: year, tradeMonth: month, tradeDay: day });
+    const { years, months, days } = periodOptions(state.transactions, tradePeriod());
+
+    filters.replaceChildren(...[
+      periodSelect(
+        t('trade.filterYear'),
+        t('trade.allYears'),
+        years,
+        year,
+        (value) => formats.yearOnly.format(new Date(Date.UTC(Number(value), 0, 1))),
+        (value) => pick({ tradeYear: value }),
+      ),
+      periodSelect(
+        t('trade.filterMonth'),
+        t('trade.allMonths'),
+        months,
+        month,
+        (value) => formats.monthOnly.format(new Date(Date.UTC(2000, Number(value) - 1, 1))),
+        (value) => pick({ tradeMonth: value }),
+      ),
+      periodSelect(
+        t('trade.filterDay'),
+        t('trade.allDays'),
+        days,
+        day,
+        (value) => String(Number(value)),
+        (value) => pick({ tradeDay: value }),
+      ),
+      (year || month) && h('button', {
+        class: 'text-button date-clear',
+        type: 'button',
+        onClick: () => pick({ tradeYear: '', tradeMonth: '', tradeDay: '' }),
+      }, t('trade.clearDates')),
+    ].filter(Boolean));
+  };
+
+  show();
+  return filters;
 }
 
 function renderTrades() {
   const results = h('div', { class: 'stack' });
+  const dateFilters = tradeDateFilters(results);
   renderTradeList(results);
 
   return h('div', { class: 'stack' },
@@ -666,6 +751,7 @@ function renderTrades() {
         value,
         selected: value === state.tradeType,
       }, typeLabel(value))))),
+    dateFilters,
     results);
 }
 

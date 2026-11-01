@@ -12,8 +12,9 @@ export const toCents = (value) => Math.round(Number(value) * 100);
 const exactUsd = (value) => Number(value.toFixed(USD_PLACES));
 
 // Thailand has no daylight saving, so a fixed offset is always correct.
-export const monthOf = (iso) =>
-  new Date(Date.parse(iso) + BANGKOK_OFFSET_MS).toISOString().slice(0, 7);
+export const dayOf = (iso) =>
+  new Date(Date.parse(iso) + BANGKOK_OFFSET_MS).toISOString().slice(0, 10);
+export const monthOf = (iso) => dayOf(iso).slice(0, 7);
 
 const byTime = (a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at);
 

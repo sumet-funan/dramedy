@@ -1,11 +1,10 @@
 // Compares rows about to be saved with the trades already here. Pure, so it can be
 // tested without a database.
 
-import { BANGKOK_OFFSET_MS, toCents } from './calc.js';
+import { dayOf, toCents } from './calc.js';
 
 export const DUPLICATE_ROW = '23505';
 
-const dayOf = (iso) => new Date(Date.parse(iso) + BANGKOK_OFFSET_MS).toISOString().slice(0, 10);
 const sameTime = (a, b) => Date.parse(a.occurred_at) === Date.parse(b.occurred_at);
 const sameDay = (a, b) => dayOf(a.occurred_at) === dayOf(b.occurred_at);
 const sameFigures = (a, b) => a.type === b.type
