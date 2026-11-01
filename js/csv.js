@@ -127,15 +127,27 @@ export function costsAgree({ shares, perShare, total }) {
   return Math.abs(shares * perShare - total) <= Math.max(0.05, shares * 0.0001);
 }
 
-function parseLine(line) {
-  const cells = [];
+// A quoted cell can hold line breaks, so records can't be split by line first.
+function parseRecords(text) {
+  const records = [];
+  let cells = [];
   let cell = '';
   let quoted = false;
 
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
+  const endCell = () => {
+    cells.push(cell);
+    cell = '';
+  };
+  const endRecord = () => {
+    endCell();
+    if (cells.some((value) => value.trim() !== '')) records.push(cells);
+    cells = [];
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
     if (quoted) {
-      if (char === '"' && line[i + 1] === '"') {
+      if (char === '"' && text[i + 1] === '"') {
         cell += '"';
         i++;
       } else if (char === '"') {
@@ -146,21 +158,22 @@ function parseLine(line) {
     } else if (char === '"') {
       quoted = true;
     } else if (char === ',') {
-      cells.push(cell);
-      cell = '';
-    } else {
+      endCell();
+    } else if (char === '\n') {
+      endRecord();
+    } else if (char !== '\r') {
       cell += char;
     }
   }
-  cells.push(cell);
-  return cells;
+  endRecord();
+  return records;
 }
 
 export function parseCsv(text) {
-  const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((line) => line.trim() !== '');
-  if (lines.length === 0) return { rows: [], errors: [t('csv.empty')] };
+  const [headerCells, ...records] = parseRecords(text.replace(/^﻿/, ''));
+  if (!headerCells) return { rows: [], errors: [t('csv.empty')] };
 
-  const header = parseLine(lines[0]).map((name) => name.trim());
+  const header = headerCells.map((name) => name.trim());
   const missing = ['occurred_at', 'type', 'amount_usd'].filter((name) => !header.includes(name));
   if (missing.length > 0) {
     return { rows: [], errors: [t('csv.missingColumn', { columns: missing.join(', ') })] };
@@ -168,8 +181,7 @@ export function parseCsv(text) {
 
   const rows = [];
   const errors = [];
-  lines.slice(1).forEach((line, index) => {
-    const cells = parseLine(line);
+  records.forEach((cells, index) => {
     const input = Object.fromEntries(header.map((name, i) => [name, cells[i]]));
     const { row, error } = normalizeRow(input);
     if (error) errors.push(t('csv.line', { line: index + 2, error }));
@@ -186,4 +198,75 @@ const quoteCell = (value) => {
 export function toCsv(rows) {
   const lines = rows.map((row) => COLUMNS.map((name) => quoteCell(row[name])).join(','));
   return `${[COLUMNS.join(','), ...lines].join('\n')}\n`;
+}
+
+const BACKUP_APP = 'dramedy';
+const BACKUP_VERSION = 1;
+const STATUSES = new Set(['holding', 'sold']);
+
+// The whole account, because trades alone can't rebuild what's held or which
+// stocks were closed.
+export function toBackup({ transactions, holdings, statuses }, exportedAt) {
+  return JSON.stringify({
+    app: BACKUP_APP,
+    version: BACKUP_VERSION,
+    exported_at: exportedAt,
+    transactions: transactions.map((row) => (
+      Object.fromEntries(COLUMNS.map((name) => [name, row[name]]))
+    )),
+    holdings: Object.values(holdings),
+    statuses: Object.entries(statuses).map(([ticker, status]) => ({ ticker, status })),
+  }, null, 2);
+}
+
+const validHolding = (row) => TICKER_PATTERN.test(row?.ticker)
+  && row.shares > 0
+  && row.total_cost_usd >= 0
+  && !Number.isNaN(Date.parse(row.updated_at))
+  && (row.current_price_usd ?? 0) >= 0;
+
+export function parseBackup(text) {
+  const invalid = { rows: [], holdings: [], statuses: [], errors: [t('backup.invalid')] };
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return invalid;
+  }
+
+  const hasParts = [data?.transactions, data?.holdings, data?.statuses].every(Array.isArray);
+  const dated = !Number.isNaN(Date.parse(data?.exported_at));
+  if (data?.app !== BACKUP_APP || data.version !== BACKUP_VERSION || !hasParts || !dated) {
+    return invalid;
+  }
+
+  const errors = [];
+  const rows = data.transactions.flatMap((input, index) => {
+    const { row, error } = normalizeRow(input ?? {});
+    if (error) errors.push(t('csv.line', { line: index + 1, error }));
+    return row ? [row] : [];
+  });
+
+  data.holdings.forEach((row, index) => {
+    if (!validHolding(row)) errors.push(t('backup.badHolding', { row: index + 1 }));
+  });
+  data.statuses.forEach((row, index) => {
+    const valid = TICKER_PATTERN.test(row?.ticker) && STATUSES.has(row?.status);
+    if (!valid) errors.push(t('backup.badStatus', { row: index + 1 }));
+  });
+
+  return {
+    rows,
+    holdings: data.holdings.filter(validHolding).map((row) => ({
+      ticker: row.ticker,
+      shares: row.shares,
+      total_cost_usd: row.total_cost_usd,
+      updated_at: row.updated_at,
+      current_price_usd: row.current_price_usd ?? null,
+      price_updated_at: row.price_updated_at ?? null,
+    })),
+    statuses: data.statuses.map(({ ticker, status }) => ({ ticker, status })),
+    exportedAt: data.exported_at,
+    errors,
+  };
 }

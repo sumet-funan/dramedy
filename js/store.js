@@ -25,6 +25,7 @@ export function createSupabaseStore(client, userId) {
         .from('transactions')
         .select('id, occurred_at, type, ticker, amount_usd, shares, note')
         .order('occurred_at', { ascending: false })
+        .order('id')
         .range(from, from + PAGE_SIZE - 1);
       if (error) throw error;
       all.push(...data);
@@ -137,6 +138,25 @@ export function createSupabaseStore(client, userId) {
       const filled = added < rows.length ? await fillShares(rows) : 0;
       return { added, filled };
     },
+
+    // Trades merge as any import does. Holdings and statuses replace those of the
+    // same stock, which brings back their dates and prices as they were.
+    async restoreBackup({ rows, holdings, statuses }) {
+      const imported = await this.importRows(rows);
+
+      if (holdings.length > 0) {
+        const { error } = await client.from('holdings')
+          .upsert(holdings.map((row) => ({ ...row, user_id: userId })));
+        if (error) throw error;
+      }
+      if (statuses.length > 0) {
+        const updated_at = new Date().toISOString();
+        const { error } = await client.from('stock_status')
+          .upsert(statuses.map((row) => ({ ...row, user_id: userId, updated_at })));
+        if (error) throw error;
+      }
+      return imported;
+    },
   };
 }
 
@@ -209,6 +229,16 @@ export function createDemoStore({ transactions, statuses, holdings }) {
         return fill ? { ...row, shares: fill.shares } : row;
       });
       return { added: fresh.length, filled: fills.length };
+    },
+    async restoreBackup({ rows: imported, holdings: stocks, statuses: choices }) {
+      const result = await this.importRows(imported);
+      stocks.forEach((row) => {
+        held[row.ticker] = row;
+      });
+      choices.forEach(({ ticker, status }) => {
+        chosen[ticker] = status;
+      });
+      return result;
     },
   };
 }

@@ -144,3 +144,20 @@ test('a partial change is dated now, not when the figures were true', async () =
   const { holdings } = await store.load();
   assert.notEqual(holdings.AAAA.updated_at, takenAt);
 });
+
+test('restoring a backup merges trades and replaces holdings and statuses', async () => {
+  const store = demoHolding();
+  const backup = {
+    rows: [trade('2026-01-05T03:00:00.000Z', { shares: 2 })],
+    holdings: [{ ...holding, shares: 30 }],
+    statuses: [{ ticker: 'BBBB', status: 'sold' }],
+  };
+
+  assert.deepEqual(await store.restoreBackup(backup), { added: 1, filled: 0 });
+  assert.deepEqual(await store.restoreBackup(backup), { added: 0, filled: 0 });
+
+  const { transactions, holdings, statuses } = await store.load();
+  assert.equal(transactions.length, 1);
+  assert.equal(holdings.AAAA.shares, 30);
+  assert.equal(statuses.BBBB, 'sold');
+});

@@ -4,6 +4,7 @@
 *.png
 !apple-touch-icon.png
 *.csv
+dramedy-backup*.json
 private/
 .env*
 node_modules/

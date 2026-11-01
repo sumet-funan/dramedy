@@ -1,7 +1,8 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import { monthOf, summarize, toCents } from './calc.js';
 import {
-  costsAgree, isPositiveType, needsTicker, normalizeRow, parseCsv, readHoldings, toCsv,
+  costsAgree, isPositiveType, needsTicker, normalizeRow, parseBackup, parseCsv, readHoldings,
+  toBackup, toCsv,
 } from './csv.js';
 import { demoData } from './demo.js';
 import { DUPLICATE_ROW, fillsShares, findDuplicates } from './duplicates.js';
@@ -40,6 +41,9 @@ const VIEWS = [
 const STOCK_FILTERS = ['all', 'review', 'holding', 'sold'];
 const ADD_MODES = ['trade', 'holdings'];
 
+// Long enough for a browser to finish fetching a saved file.
+const DOWNLOAD_WINDOW_MS = 60000;
+
 const root = document.getElementById('app');
 const isDemo = new URLSearchParams(location.search).has('demo');
 
@@ -60,6 +64,7 @@ const state = {
   openTrade: null,
   transactions: [],
   statuses: {},
+  holdings: {},
   summary: null,
   notice: null,
   animate: true,
@@ -149,6 +154,7 @@ async function refresh() {
   const { transactions, statuses, holdings } = await state.store.load();
   state.transactions = transactions;
   state.statuses = statuses;
+  state.holdings = holdings;
   state.summary = summarize(transactions, statuses, holdings);
 }
 
@@ -1031,16 +1037,50 @@ function tradeForm() {
     h('button', { class: 'capsule wide', type: 'submit' }, t('form.save')));
 }
 
-function downloadExport() {
-  const blob = new Blob([toCsv(state.transactions)], { type: 'text/csv' });
+// Safari starts fetching after the click returns, so the address has to outlive it.
+function saveFile(prefix, extension, text, type) {
   const link = h('a', {
-    href: URL.createObjectURL(blob),
-    download: `dramedy-trades-${new Date().toISOString().slice(0, 10)}.csv`,
+    href: URL.createObjectURL(new Blob([text], { type })),
+    download: `${prefix}-${new Date().toISOString().slice(0, 10)}.${extension}`,
   });
   link.click();
-  URL.revokeObjectURL(link.href);
+  setTimeout(() => URL.revokeObjectURL(link.href), DOWNLOAD_WINDOW_MS);
+}
+
+function downloadExport() {
+  saveFile('dramedy-trades', 'csv', toCsv(state.transactions), 'text/csv');
   setNotice('good', t('data.exported', { count: state.transactions.length }));
   render();
+}
+
+function downloadBackup() {
+  const backup = toBackup(state, new Date().toISOString());
+  saveFile('dramedy-backup', 'json', backup, 'application/json');
+  setNotice('good', t('data.backedUp', {
+    trades: state.transactions.length,
+    holdings: Object.keys(state.holdings).length,
+  }));
+  render();
+}
+
+function restoreFile(text) {
+  const backup = parseBackup(text);
+  const { rows, holdings, statuses, errors, exportedAt } = backup;
+  if (errors.length > 0) {
+    const more = errors.length > 3 ? t('error.more', { count: errors.length - 3 }) : '';
+    setNotice('bad', t('data.importFailed', { errors: listErrors(errors), more }));
+    render();
+    return undefined;
+  }
+
+  const counts = { holdings: holdings.length, statuses: statuses.length };
+  const date = formats.date.format(new Date(exportedAt));
+  if (!confirm(t('data.confirmRestore', { ...counts, date, trades: rows.length }))) return undefined;
+
+  return run(
+    () => state.store.restoreBackup(backup),
+    (saved) => `${importedText(saved, rows.length)} ${t('data.restored', counts)}`,
+  );
 }
 
 async function importFile(event) {
@@ -1048,7 +1088,13 @@ async function importFile(event) {
   if (!file) return;
   event.target.value = '';
 
-  const { rows, errors } = parseCsv(await file.text());
+  const text = await file.text();
+  if (file.name.toLowerCase().endsWith('.json')) {
+    await restoreFile(text);
+    return;
+  }
+
+  const { rows, errors } = parseCsv(text);
   if (errors.length > 0) {
     const more = errors.length > 3 ? t('error.more', { count: errors.length - 3 }) : '';
     setNotice('bad', t('data.importFailed', { errors: listErrors(errors), more }));
@@ -1343,10 +1389,14 @@ function renderMore() {
         h('input', {
           class: 'file-input',
           type: 'file',
-          accept: '.csv,text/csv',
+          accept: '.csv,text/csv,.json,application/json',
           'aria-label': t('data.import'),
           onChange: importFile,
         })),
+      h('button', { class: 'row row-button', type: 'button', onClick: downloadBackup },
+        h('span', { class: 'row-icon' }, icon('export')),
+        h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, t('data.backup'))),
+        icon('chevron')),
       h('button', { class: 'row row-button', type: 'button', onClick: downloadExport },
         h('span', { class: 'row-icon' }, icon('export')),
         h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, t('data.export'))),
@@ -1433,8 +1483,10 @@ async function openApp(session) {
     await refresh();
     state.animate = true;
     render();
+    return true;
   } catch (error) {
     renderLogin(describeError(error));
+    return false;
   }
 }
 
@@ -1461,7 +1513,10 @@ async function start() {
         renderLogin();
       } else if (openedFor !== session.user.id) {
         openedFor = session.user.id;
-        openApp(session);
+        // A failed load leaves the sign-in form up, and signing in again must retry.
+        openApp(session).then((opened) => {
+          if (!opened) openedFor = null;
+        });
       }
     });
   });

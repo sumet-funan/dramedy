@@ -53,6 +53,12 @@ gain or loss. A blank total cost is worked out from the shares and cost per shar
 Full figures are dated with the time they were true, so later trades carry on from
 them. An amount on its own only changes the price.
 
+## Backups
+
+More > Save Full Backup keeps trades, holdings and stock statuses in one JSON file, and
+importing that file brings them back. Export All Trades is a CSV of trades only. Backup
+files hold private data, so they must never be committed.
+
 ## Duplicates
 
 The database refuses a trade with the same time, type, ticker and amount as one

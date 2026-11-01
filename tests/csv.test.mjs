@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  costsAgree, normalizeRow, parseCsv, readHoldings, toCsv,
+  costsAgree, normalizeRow, parseBackup, parseCsv, readHoldings, toBackup, toCsv,
 } from '../js/csv.js';
 import { setLanguage } from '../js/i18n.js';
 
@@ -211,4 +211,84 @@ test('an export can be imported again without changes', () => {
   const { rows, errors } = parseCsv(toCsv(original));
   assert.deepEqual(errors, []);
   assert.deepEqual(rows, original);
+});
+
+test('a note with a line break survives an export and import', () => {
+  const row = {
+    occurred_at: '2026-01-02T14:00:00.000Z',
+    type: 'buy',
+    ticker: 'AAA',
+    amount_usd: -10,
+    shares: null,
+    note: 'first line\nsecond, "quoted" line',
+  };
+  const { rows, errors } = parseCsv(toCsv([row]));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(rows, [row]);
+});
+
+test('blank lines and Windows line endings are ignored', () => {
+  const { rows, errors } = parseCsv(`${HEADER}\r\n\r\n2026-01-01T07:00:00+07:00,deposit,,100.00,,\r\n\r\n`);
+  assert.deepEqual(errors, []);
+  assert.equal(rows.length, 1);
+});
+
+const account = {
+  transactions: [{
+    id: 'x',
+    occurred_at: '2026-01-02T14:00:00.000Z',
+    type: 'buy',
+    ticker: 'AAA',
+    amount_usd: -10,
+    shares: 2,
+    note: null,
+  }],
+  holdings: {
+    AAA: {
+      ticker: 'AAA',
+      shares: 2,
+      total_cost_usd: 10,
+      updated_at: '2026-01-03T00:00:00.000Z',
+      current_price_usd: 6,
+      price_updated_at: '2026-01-04T00:00:00.000Z',
+    },
+  },
+  statuses: { BBB: 'sold' },
+};
+const backupOf = (changes) => JSON.stringify({
+  ...JSON.parse(toBackup(account, '2026-01-05T00:00:00.000Z')),
+  ...changes,
+});
+
+test('a backup brings back trades, holdings and statuses', () => {
+  const backup = parseBackup(toBackup(account, '2026-01-05T00:00:00.000Z'));
+  assert.deepEqual(backup.errors, []);
+  assert.equal(backup.exportedAt, '2026-01-05T00:00:00.000Z');
+  assert.equal(backup.rows.length, 1);
+  assert.equal(backup.rows[0].shares, 2);
+  assert.equal('id' in backup.rows[0], false);
+  assert.deepEqual(backup.holdings, [account.holdings.AAA]);
+  assert.deepEqual(backup.statuses, [{ ticker: 'BBB', status: 'sold' }]);
+});
+
+test('other files are refused as backups', () => {
+  const expected = ["This isn’t a Dramedy backup file"];
+  assert.deepEqual(parseBackup('not json').errors, expected);
+  assert.deepEqual(parseBackup('null').errors, expected);
+  assert.deepEqual(parseBackup('{"app":"other"}').errors, expected);
+  assert.deepEqual(parseBackup(backupOf({ version: 2 })).errors, expected);
+  assert.deepEqual(parseBackup(backupOf({ holdings: {} })).errors, expected);
+  assert.deepEqual(parseBackup(backupOf({ exported_at: 'soon' })).errors, expected);
+});
+
+test('a backup with a bad part reports it', () => {
+  assert.deepEqual(
+    parseBackup(backupOf({ holdings: [{ ticker: 'AAA', shares: 0 }] })).errors,
+    ['Holding 1 isn’t valid'],
+  );
+  assert.deepEqual(
+    parseBackup(backupOf({ statuses: [{ ticker: 'AAA', status: 'review' }] })).errors,
+    ['Status 1 isn’t valid'],
+  );
+  assert.equal(parseBackup(backupOf({ transactions: [null] })).errors.length, 1);
 });
