@@ -52,6 +52,7 @@ const state = {
   addMode: 'trade',
   holdingDraft: [],
   holdingNote: '',
+  holdingAsOf: '',
   tradeDraft: [],
   tradeNote: '',
   tradeSearch: '',
@@ -119,7 +120,7 @@ const monthLabel = (key) => formats.month.format(monthDate(key));
 const typeLabel = (type) => t(`type.${type}`);
 
 function bangkokNowForInput() {
-  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 19);
 }
 
 const listErrors = (errors) => errors.slice(0, 3).join(t('error.join'));
@@ -616,7 +617,7 @@ function submitTrade(event) {
 
   const { row, error } = normalizeRow({
     type,
-    occurred_at: `${form.get('occurred_at')}:00+07:00`,
+    occurred_at: `${form.get('occurred_at')}+07:00`,
     ticker: form.get('ticker'),
     amount_usd: isPositiveType(type) ? amount : -amount,
     shares: form.get('shares'),
@@ -1017,7 +1018,11 @@ function tradeForm() {
       shares), t('form.amountHint')),
     section(null, h('div', { class: 'card' },
       formRow(t('form.date'), h('input', {
-        name: 'occurred_at', type: 'datetime-local', value: bangkokNowForInput(), required: true,
+        name: 'occurred_at',
+        type: 'datetime-local',
+        step: '1',
+        value: bangkokNowForInput(),
+        required: true,
       })),
       formRow(t('form.note'), h('input', {
         name: 'note', maxlength: 500, placeholder: t('form.optional'),
@@ -1170,6 +1175,7 @@ function savedHoldings() {
     {
       shares: stock.sharesHeld,
       total: stock.costLeft / 100,
+      outdated: stock.outdated,
       perShare: Math.round((stock.costLeft / stock.sharesHeld) * 100) / 10000,
       unrealized: stock.unrealized === null ? undefined : stock.unrealized / 100,
     },
@@ -1265,12 +1271,21 @@ function holdingsForm() {
       markProblems(problems);
       return;
     }
+    // Left alone, the figures are as of the moment they're saved.
+    const takenAt = state.holdingAsOf
+      ? new Date(`${state.holdingAsOf}+07:00`).toISOString()
+      : new Date().toISOString();
+    if (Date.parse(takenAt) > Date.now()) {
+      show(t('holdings.failed', { errors: t('holdings.futureAsOf') }));
+      return;
+    }
     show('');
 
     const lines = rows.map((row) => changeLine(row, saved[row.ticker]));
     if (confirm(`${t('holdings.confirm')}\n\n${lines.join('\n')}${unrealizedCheck(entries)}`)) {
-      run(() => state.store.saveHoldings(rows), () => {
+      run(() => state.store.saveHoldings(rows, takenAt), () => {
         state.holdingDraft = [];
+        state.holdingAsOf = '';
         return t('holdings.saved', { count: rows.length });
       });
     }
@@ -1284,6 +1299,15 @@ function holdingsForm() {
       note,
       h('button', { class: 'row row-button action', type: 'button', onClick: addRow }, t('holdings.add'))),
     t('holdings.footer')),
+    section(null, h('div', { class: 'card' },
+      formRow(t('holdings.asOf'), h('input', {
+        type: 'datetime-local',
+        step: '1',
+        value: state.holdingAsOf || bangkokNowForInput(),
+        onInput: (event) => {
+          state.holdingAsOf = event.target.value;
+        },
+      }))), t('holdings.asOfHint')),
     save);
 }
 

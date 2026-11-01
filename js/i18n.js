@@ -187,6 +187,10 @@ export const messages = {
     'holdings.noShares': '{ticker} has no share count',
     'holdings.noTotal': '{ticker} has no total cost',
     'holdings.lossTooLarge': '{ticker}: the loss is larger than the total cost',
+    'holdings.outdated': '{ticker}: a later trade has no share count, so enter both the shares and the cost',
+    'holdings.asOf': 'Figures as of',
+    'holdings.asOfHint': 'Change this only if the figures are older than now. Trades after this time are added on top.',
+    'holdings.futureAsOf': 'The figures can’t be from the future',
 
     'image.import': 'Import from Images',
     'image.loading': 'Getting ready to read…',
@@ -424,6 +428,10 @@ export const messages = {
     'holdings.noShares': '{ticker} ไม่มีจำนวนหุ้น',
     'holdings.noTotal': '{ticker} ไม่มีต้นทุนรวม',
     'holdings.lossTooLarge': '{ticker}: ขาดทุนมากกว่าต้นทุนรวม',
+    'holdings.outdated': '{ticker}: มีรายการหลังจากนี้ที่ไม่มีจำนวนหุ้น โปรดกรอกทั้งจำนวนหุ้นและต้นทุน',
+    'holdings.asOf': 'ข้อมูล ณ เวลา',
+    'holdings.asOfHint': 'เปลี่ยนเฉพาะเมื่อตัวเลขเก่ากว่าตอนนี้ รายการหลังเวลานี้จะถูกคำนวณเพิ่มจากตัวเลขเหล่านี้',
+    'holdings.futureAsOf': 'เวลาของข้อมูลต้องไม่อยู่ในอนาคต',
 
     'image.import': 'นำเข้าจากภาพ',
     'image.loading': 'กำลังเตรียมอ่านภาพ…',

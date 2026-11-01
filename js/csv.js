@@ -88,13 +88,17 @@ export function readHoldings(entries, saved = {}) {
     const total = costFrom(entry, shares, held);
     const unrealized = Number(entry.unrealized);
     const hasResult = entry.unrealized !== '';
+    const hasShares = entry.shares !== '';
+    const hasCost = entry.total !== '' || entry.perShare !== '';
     const index = entries.indexOf(entry);
     const report = (key, values) => problems.push({ index, message: t(key, values) });
 
     if (!TICKER_PATTERN.test(ticker)) report('holdings.badTicker', { row: index + 1 });
     else if (seen.has(ticker)) report('holdings.twice', { ticker });
-    else if (held && !entry.shares && !entry.perShare && !entry.total && !hasResult) {
+    else if (held && !hasShares && !hasCost && !hasResult) {
       report('holdings.nothing', { ticker });
+    } else if (held?.outdated && (hasShares || hasCost) && !(hasShares && hasCost)) {
+      report('holdings.outdated', { ticker });
     } else if (!(shares > 0)) report('holdings.noShares', { ticker });
     else if (!(total >= 0)) report('holdings.noTotal', { ticker });
     else if (hasResult && !(total + unrealized >= 0)) {
@@ -102,7 +106,11 @@ export function readHoldings(entries, saved = {}) {
     }
     seen.add(ticker);
 
+    // Only a full set of figures describes the holding at a moment in time. A row
+    // with just a result changes the price, and the holding itself stays as it is.
     const row = { ticker, shares, total_cost_usd: total };
+    if (!hasShares && !hasCost) row.priceOnly = true;
+    else if (held && !(hasShares && hasCost)) row.partial = true;
     return hasResult
       ? { ...row, current_price_usd: impliedPrice({ shares, total, unrealized }) }
       : row;

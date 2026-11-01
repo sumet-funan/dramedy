@@ -50,6 +50,8 @@ as checked.
 Holdings are typed in from the broker's list of each stock: outstanding shares, cost
 per share, total cost and amount. Amount is the broker's "มูลค่า" line, which is the
 gain or loss. A blank total cost is worked out from the shares and cost per share.
+Full figures are dated with the time they were true, so later trades carry on from
+them. An amount on its own only changes the price.
 
 ## Duplicates
 

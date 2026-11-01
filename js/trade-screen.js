@@ -12,6 +12,12 @@ const FEE_TYPES = { SEC: 'fee_sec', TAF: 'fee_taf', CAT: 'fee_cat' };
 const BUDDHIST_YEARS = 543;
 const TICKER_TYPES = new Set(['buy', 'sell', 'dividend', 'withholding']);
 
+// Thai words in front of a ticker read as these characters.
+const STRAY_LETTERS = /^[\dOBDGU]{1,3}$/;
+const FEE_TITLE = /ค่า|ธรรม|เนียม/;
+const TRADE_TITLE = /^[ซขบ]/;
+const CASH_TITLE = /ป.{0,2}นผล|ภาษี|ถอน|คืน|แลก|โอน|ฝาก/;
+
 const AMOUNT_LINE = /([-+])?\s?([\d,]+\.\d{2})\s*USD/;
 const DAY = /^\D*(\d{1,2})\s/;
 const WORDED_DAY = /^\D*?(\d{1,2})(?=\s|[ก-๙])/;
@@ -22,22 +28,26 @@ export const MONTH_LETTERS = [...new Set(MONTHS.join('').replaceAll('.', ''))].j
 
 // A line such as "AAAA -12.34 USD", or null if it isn't a row. The Thai word in
 // front of a ticker reads as stray letters, as in "O0AAAA", so a ticker already
-// known is looked for at the end of the word. Anything else is marked as a guess.
+// known is looked for at the end of the word. A longer real ticker can end the same
+// way, so only a digit in front proves the letters are stray.
+// Anything else is marked as a guess.
 export function readAmountLine(text, knownTickers = []) {
   const match = text.match(AMOUNT_LINE);
   if (!match) return null;
 
-  const words = text.slice(0, match.index).match(/[A-Z0-9][A-Z0-9.-]+/g) ?? [];
+  const words = text.slice(0, match.index).match(/[A-Z][A-Z0-9.-]*|\d[A-Z0-9.-]+/g) ?? [];
   const word = words.at(-1) ?? '';
+  const strayBefore = (ticker) => word.slice(0, word.length - ticker.length);
   const known = [...knownTickers]
     .sort((a, b) => b.length - a.length)
-    .find((ticker) => word.endsWith(ticker));
+    .find((ticker) => word === ticker
+      || (word.endsWith(ticker) && STRAY_LETTERS.test(strayBefore(ticker))));
 
   return {
     sign: match[1] ?? null,
     amount: Number(match[2].replaceAll(',', '')),
     label: known ?? word,
-    knownLabel: Boolean(known) || Boolean(FEE_TYPES[word]),
+    knownLabel: Boolean(known) && (word === known || /\d/.test(strayBefore(known))),
     noComma: /\d{4}/.test(match[2]),
   };
 }
@@ -49,7 +59,9 @@ export function readAmountLine(text, knownTickers = []) {
 export function settleAmount(first, again) {
   const read = again ?? first;
   const sign = first?.sign ?? again?.sign ?? null;
-  const differ = Boolean(first && again) && first.amount !== again.amount;
+  const differ = Boolean(first && again) && (
+    first.amount !== again.amount || Boolean(first.sign && again.sign && first.sign !== again.sign)
+  );
   return {
     sign,
     amount: read.amount,
@@ -61,8 +73,8 @@ export function settleAmount(first, again) {
 // the cleanest time. When the day runs into the month's letters in the digits, which
 // read as stray digits, it can't be trusted there and is left for checking. A digit
 // gets lost far more often than one appears, so the longer day wins, and between
-// two of the same length the digits do. A day in dispute or a time only the Thai
-// reading found comes back unsure.
+// two of the same length the digits do. Two days that differ or a time only the
+// Thai reading found come back unsure.
 export function readDateLine(digits, worded = '') {
   const digitDay = digits.match(DAY)?.[1] ?? '';
   const wordedDay = worded.match(WORDED_DAY)?.[1] ?? '';
@@ -73,7 +85,7 @@ export function readDateLine(digits, worded = '') {
     day: day >= 1 && day <= 31 ? day : null,
     time: digitTime ?? worded.match(TIME)?.[1] ?? null,
     year: year >= 60 && year <= 99 ? 2500 + year - BUDDHIST_YEARS : null,
-    unsure: !digitTime || (digitDay.length === wordedDay.length && digitDay !== wordedDay),
+    unsure: !digitTime || Boolean(digitDay && wordedDay && digitDay !== wordedDay),
   };
 }
 
@@ -87,15 +99,26 @@ export function readMonth(text) {
   return matches[0]?.index ?? null;
 }
 
+// The title decides, because a stock can share a name with a fee, as CAT does, and
+// a ticker that wasn't read must not turn a trade into money moving.
 export function readType(thai, label, sign) {
-  if (FEE_TYPES[label]) return FEE_TYPES[label];
+  if (FEE_TYPES[label] && !TRADE_TITLE.test(thai)) return FEE_TYPES[label];
   if (/ป.{0,2}นผล/.test(thai)) return 'dividend';
   if (/ภาษี/.test(thai)) return 'withholding';
   if (/ถอน/.test(thai)) return 'withdrawal';
   if (/คืน/.test(thai)) return 'commission_refund';
   if (/แลก/.test(thai)) return sign === '+' ? 'fx_in' : 'fx_out';
-  if (/โอน|ฝาก/.test(thai) || !label) return sign === '+' ? 'deposit' : 'withdrawal';
+  if (/โอน|ฝาก/.test(thai) || (!label && !TRADE_TITLE.test(thai))) {
+    return sign === '+' ? 'deposit' : 'withdrawal';
+  }
   return sign === '+' ? 'sell' : 'buy';
+}
+
+// A fee without its title, or a row with neither a ticker nor a title to go on, is
+// only a best guess at the type.
+function typeIsGuess(thai, label) {
+  if (FEE_TYPES[label]) return !FEE_TITLE.test(thai);
+  return !label && !TRADE_TITLE.test(thai) && !CASH_TITLE.test(thai);
 }
 
 const stamp = ({ monthCount, day, time }) => monthCount * 31 * 86400
@@ -185,7 +208,7 @@ export function readTradeRows(images, knownTickers) {
         ticker: hasTicker ? line.label : '',
         amount: line.amount,
         date: dates[index].date ?? '',
-        checkAmount: line.checkAmount,
+        checkAmount: line.checkAmount || typeIsGuess(line.thai, line.label),
         checkDate: dates[index].doubtful,
         checkTicker: hasTicker && !line.knownLabel,
       };

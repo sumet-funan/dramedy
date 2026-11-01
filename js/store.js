@@ -94,20 +94,26 @@ export function createSupabaseStore(client, userId) {
     },
 
     // Only the listed stocks change. Prices are saved separately so a row without
-    // one keeps the price it had.
-    async saveHoldings(rows) {
+    // one keeps the price it had. A full set of figures is dated when it was true,
+    // while a partial one builds on what's known now.
+    async saveHoldings(rows, takenAt) {
       const now = new Date().toISOString();
-      const saved = await client.from('holdings').upsert(
-        rows.map(({ ticker, shares, total_cost_usd }) => ({
-          ticker, shares, total_cost_usd, user_id: userId, updated_at: now,
-        })),
-      );
-      if (saved.error) throw saved.error;
+      const figures = rows.filter((row) => !row.priceOnly);
+      if (figures.length > 0) {
+        const saved = await client.from('holdings').upsert(
+          figures.map(({
+            ticker, shares, total_cost_usd, partial,
+          }) => ({
+            ticker, shares, total_cost_usd, user_id: userId, updated_at: partial ? now : takenAt,
+          })),
+        );
+        if (saved.error) throw saved.error;
 
-      const marked = await client.from('stock_status').upsert(rows.map(({ ticker }) => ({
-        ticker, status: 'holding', user_id: userId, updated_at: now,
-      })));
-      if (marked.error) throw marked.error;
+        const marked = await client.from('stock_status').upsert(figures.map(({ ticker }) => ({
+          ticker, status: 'holding', user_id: userId, updated_at: now,
+        })));
+        if (marked.error) throw marked.error;
+      }
 
       await setPrices(rows
         .filter((row) => row.current_price_usd !== undefined)
@@ -163,16 +169,21 @@ export function createDemoStore({ transactions, statuses, holdings }) {
       });
       return { prices: Object.fromEntries(prices), failed: [] };
     },
-    async saveHoldings(listed) {
-      const updated_at = new Date().toISOString();
-      listed.forEach((row) => {
+    async saveHoldings(listed, takenAt) {
+      const now = new Date().toISOString();
+      listed.forEach(({ priceOnly, partial, ...row }) => {
+        const before = held[row.ticker];
         held[row.ticker] = {
-          current_price_usd: held[row.ticker]?.current_price_usd ?? null,
+          current_price_usd: before?.current_price_usd ?? null,
           price_updated_at: row.current_price_usd === undefined
-            ? held[row.ticker]?.price_updated_at ?? null
-            : updated_at,
+            ? before?.price_updated_at ?? null
+            : now,
           ...row,
-          updated_at,
+          ...(priceOnly ? {
+            shares: before.shares,
+            total_cost_usd: before.total_cost_usd,
+          } : {}),
+          updated_at: priceOnly ? before.updated_at : (partial ? now : takenAt),
         };
         chosen[row.ticker] = 'holding';
       });

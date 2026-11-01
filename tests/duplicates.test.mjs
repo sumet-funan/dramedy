@@ -108,3 +108,39 @@ test('the demo store skips what is here and fills blank share counts', async () 
     { code: '23505' },
   );
 });
+
+const holding = {
+  ticker: 'AAAA', shares: 10, total_cost_usd: 25, updated_at: '2026-01-01T00:00:00.000Z',
+};
+const demoHolding = () => createDemoStore({
+  transactions: [], statuses: {}, holdings: { AAAA: holding },
+});
+const takenAt = '2026-02-01T00:00:00.000Z';
+
+test('full figures are dated when they were true', async () => {
+  const store = demoHolding();
+  await store.saveHoldings([{ ticker: 'AAAA', shares: 20, total_cost_usd: 60 }], takenAt);
+  const { holdings } = await store.load();
+  assert.equal(holdings.AAAA.updated_at, takenAt);
+  assert.equal(holdings.AAAA.shares, 20);
+});
+
+test('a new price leaves the holding and its date alone', async () => {
+  const store = demoHolding();
+  await store.saveHoldings([{
+    ticker: 'AAAA', shares: 99, total_cost_usd: 99, priceOnly: true, current_price_usd: 2,
+  }], takenAt);
+  const { holdings } = await store.load();
+  assert.equal(holdings.AAAA.updated_at, holding.updated_at);
+  assert.equal(holdings.AAAA.shares, 10);
+  assert.equal(holdings.AAAA.current_price_usd, 2);
+});
+
+test('a partial change is dated now, not when the figures were true', async () => {
+  const store = demoHolding();
+  await store.saveHoldings([{
+    ticker: 'AAAA', shares: 20, total_cost_usd: 25, partial: true,
+  }], takenAt);
+  const { holdings } = await store.load();
+  assert.notEqual(holdings.AAAA.updated_at, takenAt);
+});

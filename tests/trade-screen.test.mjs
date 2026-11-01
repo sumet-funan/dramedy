@@ -19,7 +19,7 @@ test('strips stray letters from a known ticker', () => {
 });
 
 test('fee names count as known', () => {
-  assert.equal(readAmountLine('TAF -0.05 USD').knownLabel, true);
+  assert.equal(readAmountLine('TAF -0.05 USD').label, 'TAF');
 });
 
 test('reads a date line, taking the Buddhist year', () => {
@@ -31,6 +31,22 @@ test('reads a date line, taking the Buddhist year', () => {
 test('leaves a day alone when it runs into the month', () => {
   assert.equal(readDateLine('30..69-10:20:30').day, null);
   assert.equal(readDateLine('30..69-10:20:30').time, '10:20:30');
+});
+
+test('a known ticker does not swallow a longer one that ends the same way', () => {
+  const line = readAmountLine('0 AAZZ -12.34 USD', ['ZZ']);
+  assert.equal(line.label, 'AAZZ');
+  assert.equal(line.knownLabel, false);
+});
+
+test('stray letters with no digit suggest a known ticker but stay marked', () => {
+  const line = readAmountLine('OOAAAA -12.34 USD', ['AAAA']);
+  assert.equal(line.label, 'AAAA');
+  assert.equal(line.knownLabel, false);
+});
+
+test('reads a ticker of one letter', () => {
+  assert.equal(readAmountLine('0 Z -12.34 USD').label, 'Z');
 });
 
 test('reads months, preferring the longer match', () => {
@@ -50,6 +66,7 @@ test('the Thai reading gives a day the digits lost', () => {
   assert.deepEqual(readDateLine(digits, '11 พ.ค. 69 - 10:2 0'), {
     day: 11, time: '10:20:30', year: 2026, unsure: false,
   });
+  assert.equal(readDateLine('1 .. 69 - 10:20:30', '11 พ.ค. 69 - 10:20:30').unsure, true);
   assert.equal(readDateLine('1.8.69 -10:20:30', '1เม.ย. 69 - 10:20:3 0').day, 1);
 });
 
@@ -69,8 +86,10 @@ test('between two days of the same length the digits win, and it stays unsure', 
   assert.equal(date.unsure, true);
 });
 
-test('the digits give a day the Thai reading cut short', () => {
-  assert.equal(readDateLine('21 .. 69 - 10:20:30', '2 พ.ค. 69 - 10:20:30').day, 21);
+test('the digits give a day the Thai reading cut short, and it stays unsure', () => {
+  const date = readDateLine('21 .. 69 - 10:20:30', '2 พ.ค. 69 - 10:20:30');
+  assert.equal(date.day, 21);
+  assert.equal(date.unsure, true);
 });
 
 test('a row with no time does not move the rows after it to another month', () => {
@@ -103,6 +122,10 @@ test('amounts that differ are marked and the enlarged one is used', () => {
   });
 });
 
+test('readings with opposite signs are marked', () => {
+  assert.equal(settleAmount(amountOf('AAAA -12.34 USD'), amountOf('+12.34 USD')).checkAmount, true);
+});
+
 test('a large amount without a comma is marked', () => {
   assert.equal(settleAmount(amountOf('AAAA -1234.56 USD'), null).checkAmount, true);
   assert.equal(settleAmount(amountOf('AAAA -1,234.56 USD'), null).checkAmount, false);
@@ -125,6 +148,39 @@ test('a purchase with no sign read stays a purchase and is marked', () => {
     line: 'AAAA 12.34 USD', digits: 'x', month: 'x', thai: 'ซื้อAAAA',
   }]], ['AAAA']);
   assert.equal(row.type, 'buy');
+  assert.equal(row.checkAmount, true);
+});
+
+const rowFrom = (text, thai, known = []) => readTradeRows([[{
+  line: text, digits: '5 0.0. 69 - 10:00:00', month: 'มิ.ย.', thai,
+}]], known)[0];
+
+test('a stock named like a fee stays a trade', () => {
+  const row = rowFrom('0 CAT -10.00 USD', 'ซื้อCAT');
+  assert.equal(row.type, 'buy');
+  assert.equal(row.ticker, 'CAT');
+  assert.equal(row.checkTicker, true);
+});
+
+test('a fee named by its title stays a fee', () => {
+  const row = rowFrom('0 CAT -0.01 USD', 'ค่าธรรมเนียม');
+  assert.equal(row.type, 'fee_cat');
+  assert.equal(row.checkAmount, false);
+});
+
+test('a fee label with an unreadable title is marked', () => {
+  assert.equal(rowFrom('0 SEC -0.01 USD', 'xx').checkAmount, true);
+});
+
+test('a trade with no ticker read stays a trade and is marked', () => {
+  const row = rowFrom('-10.00 USD', 'ซื้อ');
+  assert.equal(row.type, 'buy');
+  assert.equal(row.checkTicker, true);
+});
+
+test('a row with neither a ticker nor a title is marked', () => {
+  const row = rowFrom('-10.00 USD', 'xx');
+  assert.equal(row.type, 'withdrawal');
   assert.equal(row.checkAmount, true);
 });
 

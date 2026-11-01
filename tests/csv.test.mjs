@@ -102,11 +102,11 @@ test('a total cost given wins over the cost per share', () => {
 
 const saved = { AAA: { shares: 10, total: 25 } };
 
-test('a stock already held keeps the figures left blank', () => {
+test('a result alone changes only the price of a stock already held', () => {
   const { rows, errors } = readHoldings([entry('aaa', '', '', '-5')], saved);
   assert.deepEqual(errors, []);
   assert.deepEqual(rows, [{
-    ticker: 'AAA', shares: 10, total_cost_usd: 25, current_price_usd: 2,
+    ticker: 'AAA', shares: 10, total_cost_usd: 25, priceOnly: true, current_price_usd: 2,
   }]);
 });
 
@@ -115,9 +115,33 @@ test('typed figures replace the saved ones', () => {
   assert.deepEqual(row, { ticker: 'AAA', shares: 20, total_cost_usd: 60 });
 });
 
-test('a cost per share alone changes the cost of a stock already held', () => {
+test('a cost per share alone is a partial change', () => {
   const [row] = readHoldings([entry('AAA', '', '', '', '3')], saved).rows;
-  assert.deepEqual(row, { ticker: 'AAA', shares: 10, total_cost_usd: 30 });
+  assert.deepEqual(row, {
+    ticker: 'AAA', shares: 10, total_cost_usd: 30, partial: true,
+  });
+});
+
+test('shares alone are a partial change', () => {
+  const [row] = readHoldings([entry('AAA', '20', '')], saved).rows;
+  assert.deepEqual(row, {
+    ticker: 'AAA', shares: 20, total_cost_usd: 25, partial: true,
+  });
+});
+
+const outdated = { AAA: { shares: 10, total: 25, outdated: true } };
+
+test('an outdated stock can still take a new result', () => {
+  const { rows, errors } = readHoldings([entry('AAA', '', '', '-5')], outdated);
+  assert.deepEqual(errors, []);
+  assert.equal(rows[0].priceOnly, true);
+});
+
+test('an outdated stock needs both shares and cost to change', () => {
+  const expected = ['AAA: a later trade has no share count, so enter both the shares and the cost'];
+  assert.deepEqual(readHoldings([entry('AAA', '20', '')], outdated).errors, expected);
+  assert.deepEqual(readHoldings([entry('AAA', '', '60')], outdated).errors, expected);
+  assert.deepEqual(readHoldings([entry('AAA', '20', '60')], outdated).errors, []);
 });
 
 test('a stock already held needs at least one figure', () => {
