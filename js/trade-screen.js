@@ -2,6 +2,8 @@
 // tested without images. The screen lists rows newest first, with amounts in
 // English and dates in Thai such as "5 มิ.ย. 69 - 10:00:00 น.".
 
+import { needsTicker } from './csv.js';
+
 const MONTHS = [
   'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
 ];
@@ -10,12 +12,12 @@ const shapeOf = (text) => text.replace(/[^ก-๙]/g, '').replaceAll('ี', 'ิ
 const MONTH_SHAPES = MONTHS.map(shapeOf);
 const FEE_TYPES = { SEC: 'fee_sec', TAF: 'fee_taf', CAT: 'fee_cat' };
 const BUDDHIST_YEARS = 543;
-const TICKER_TYPES = new Set(['buy', 'sell', 'dividend', 'withholding']);
 
 // Thai words in front of a ticker read as these characters.
 const STRAY_LETTERS = /^[\dOBDGU]{1,3}$/;
+const LONE_TICKER = /[A-Z][A-Z0-9.-]{0,9}/;
 const FEE_TITLE = /ค่า|ธรรม|เนียม/;
-const TRADE_TITLE = /^[ซขบ]/;
+export const TRADE_TITLE = /^[ซขบ]/;
 const CASH_TITLE = /ป.{0,2}นผล|ภาษี|ถอน|คืน|แลก|โอน|ฝาก/;
 
 const AMOUNT_LINE = /([-+])?\s?([\d,]+\.\d{2})\s*USD/;
@@ -46,6 +48,7 @@ export function readAmountLine(text, knownTickers = []) {
   return {
     sign: match[1] ?? null,
     amount: Number(match[2].replaceAll(',', '')),
+    word,
     label: known ?? word,
     knownLabel: Boolean(known) && (word === known || /\d/.test(strayBefore(known))),
     noComma: /\d{4}/.test(match[2]),
@@ -178,12 +181,21 @@ export function settleDates(rows) {
 // With no sign read at all, the title's first letter tells a sale from a purchase.
 const SALE_TITLE = /^[ขบ]/;
 
+// The ticker is read a second time from its own crop, clear of the Thai word in
+// front of it. That crop can clip a first letter, so only two readings of the whole
+// same word count, and then the ticker doesn't need to be known already.
+function settleTicker(read, tickerText = '') {
+  return tickerText.match(LONE_TICKER)?.[0] === read.word
+    ? { ...read, label: read.word, knownLabel: true }
+    : read;
+}
+
 function readRow(line, knownTickers) {
   const first = readAmountLine(line.line, knownTickers);
   const again = readAmountLine(line.again ?? '');
   if (!first && !again) return null;
 
-  const { label, knownLabel } = first ?? again;
+  const { label, knownLabel } = settleTicker(first ?? again, line.ticker);
   return {
     ...line, ...settleAmount(first, again), label, knownLabel: Boolean(first) && knownLabel,
   };
@@ -202,7 +214,7 @@ export function readTradeRows(images, knownTickers) {
     return parsed.map((line, index) => {
       const sign = line.sign ?? (SALE_TITLE.test(line.thai) ? '+' : '-');
       const type = readType(line.thai, line.label, sign);
-      const hasTicker = !type.startsWith('fee_') && TICKER_TYPES.has(type);
+      const hasTicker = needsTicker(type);
       return {
         type,
         ticker: hasTicker ? line.label : '',

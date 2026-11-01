@@ -10,9 +10,21 @@ const NEGATIVE_TYPES = new Set([
 ]);
 const TICKER_TYPES = new Set(['buy', 'sell', 'dividend', 'withholding']);
 const TICKER_PATTERN = /^[A-Z0-9.-]{1,10}$/;
+const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?$/;
+// The database keeps amounts and share counts below this.
+const LARGEST_NUMBER = 1e12;
 
 export const needsTicker = (type) => TICKER_TYPES.has(type);
+export const usesShares = (type) => type === 'buy' || type === 'sell';
 export const isPositiveType = (type) => POSITIVE_TYPES.has(type);
+
+// The broker works in Bangkok time, so a time with no zone means that, whichever
+// device reads the file.
+function withZone(value) {
+  const text = String(value ?? '').trim();
+  if (!LOCAL_TIME.test(text)) return text;
+  return `${text.includes('T') ? text : `${text}T00:00:00`}+07:00`;
+}
 
 // Returns { row } when valid, otherwise { error } with a readable reason.
 export function normalizeRow(input) {
@@ -21,7 +33,7 @@ export function normalizeRow(input) {
     return { error: t('csv.unknownType', { type }) };
   }
 
-  const time = Date.parse(input.occurred_at);
+  const time = Date.parse(withZone(input.occurred_at));
   if (Number.isNaN(time)) return { error: t('csv.invalidDate', { value: input.occurred_at }) };
 
   const ticker = String(input.ticker ?? '').trim().toUpperCase();
@@ -30,7 +42,7 @@ export function normalizeRow(input) {
   }
 
   const amount = Number(input.amount_usd);
-  if (!Number.isFinite(amount) || amount === 0) {
+  if (!(Math.abs(amount) < LARGEST_NUMBER) || Math.round(amount * 100) === 0) {
     return { error: t('csv.invalidAmount', { value: input.amount_usd }) };
   }
   if (POSITIVE_TYPES.has(type) !== amount > 0) {
@@ -39,7 +51,9 @@ export function normalizeRow(input) {
 
   const rawShares = String(input.shares ?? '').trim();
   const shares = rawShares === '' ? null : Number(rawShares);
-  if (shares !== null && !(shares > 0)) return { error: t('csv.invalidShares', { value: rawShares }) };
+  if (shares !== null && !(shares > 0 && shares < LARGEST_NUMBER)) {
+    return { error: t('csv.invalidShares', { value: rawShares }) };
+  }
 
   const note = String(input.note ?? '').trim();
   if (note.length > 500) return { error: t('csv.noteTooLong') };

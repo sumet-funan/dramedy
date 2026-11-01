@@ -1,8 +1,11 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
-import { monthOf, summarize, toCents } from './calc.js';
+import {
+  BANGKOK_OFFSET_MS, monthOf, summarize, toCents,
+} from './calc.js';
+import { CHECK_FIELDS, firstChecks, settleChecks } from './checks.js';
 import {
   costsAgree, isPositiveType, needsTicker, normalizeRow, parseBackup, parseCsv, readHoldings,
-  toBackup, toCsv,
+  toBackup, toCsv, usesShares,
 } from './csv.js';
 import { demoData } from './demo.js';
 import { DUPLICATE_ROW, fillsShares, findDuplicates } from './duplicates.js';
@@ -43,6 +46,7 @@ const ADD_MODES = ['trade', 'holdings'];
 
 // Long enough for a browser to finish fetching a saved file.
 const DOWNLOAD_WINDOW_MS = 60000;
+const TYPING_PAUSE_MS = 200;
 
 const root = document.getElementById('app');
 const isDemo = new URLSearchParams(location.search).has('demo');
@@ -59,6 +63,8 @@ const state = {
   holdingAsOf: '',
   tradeDraft: [],
   tradeNote: '',
+  manualTrade: null,
+  readingImages: false,
   tradeSearch: '',
   tradeType: '',
   openTrade: null,
@@ -90,6 +96,7 @@ function h(tag, props = {}, ...children) {
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const money = (cents) => usd.format(cents / 100);
+const shareText = (shares) => shares.toLocaleString('en-US', { maximumFractionDigits: 6 });
 const signedMoney = (cents) => `${cents > 0 ? '+' : ''}${money(cents)}`;
 const toneOf = (cents) => (cents > 0 ? 'gain' : cents < 0 ? 'loss' : '');
 
@@ -125,7 +132,7 @@ const monthLabel = (key) => formats.month.format(monthDate(key));
 const typeLabel = (type) => t(`type.${type}`);
 
 function bangkokNowForInput() {
-  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 19);
+  return new Date(Date.now() + BANGKOK_OFFSET_MS).toISOString().slice(0, 19);
 }
 
 const listErrors = (errors) => errors.slice(0, 3).join(t('error.join'));
@@ -148,6 +155,29 @@ function describeError(error) {
     return t('error.network');
   }
   return message;
+}
+
+// Nothing of one account may carry over to whoever signs in next.
+function clearAccount() {
+  Object.assign(state, {
+    store: null,
+    email: '',
+    view: 'overview',
+    holdingDraft: [],
+    holdingNote: '',
+    holdingAsOf: '',
+    tradeDraft: [],
+    tradeNote: '',
+    manualTrade: null,
+    tradeSearch: '',
+    tradeType: '',
+    openTrade: null,
+    transactions: [],
+    statuses: {},
+    holdings: {},
+    summary: null,
+    notice: null,
+  });
 }
 
 async function refresh() {
@@ -285,7 +315,7 @@ function emptyState() {
     h('div', { class: 'orb', 'aria-hidden': 'true' }),
     h('h2', {}, t('empty.title')),
     h('p', {}, t('empty.text')),
-    h('button', { class: 'capsule', type: 'button', onClick: () => goTo('more') }, t('empty.action')));
+    h('button', { class: 'capsule', type: 'button', onClick: () => goTo('add') }, t('empty.action')));
 }
 
 function pricedHint(s) {
@@ -306,7 +336,7 @@ function overallHint(s) {
 
 function renderOverview() {
   const s = state.summary;
-  if (state.transactions.length === 0) return emptyState();
+  if (state.transactions.length === 0 && s.heldCount === 0) return emptyState();
 
   return h('div', { class: 'stack' },
     h('section', { class: 'hero' },
@@ -361,7 +391,7 @@ function renderOverview() {
 function confirmSold(stock) {
   return confirm(t('status.confirmSold', {
     ticker: stock.ticker,
-    shares: stock.sharesHeld.toLocaleString('en-US'),
+    shares: shareText(stock.sharesHeld),
     cost: money(stock.costLeft),
   }));
 }
@@ -391,7 +421,7 @@ function statusPicker(stock) {
 
 function heldFacts(stock) {
   return t('stock.held', {
-    shares: stock.sharesHeld.toLocaleString('en-US'),
+    shares: shareText(stock.sharesHeld),
     cost: money(Math.round(stock.costLeft / stock.sharesHeld)),
   });
 }
@@ -437,7 +467,7 @@ function stockRow(stock) {
       stock.fromHolding && h('span', { class: 'row-subtitle' }, priceFacts(stock)),
       h('span', { class: 'row-subtitle' }, trades),
       usesTradeShares && stock.sharesHeld > 0 && h('span', { class: 'row-subtitle' },
-        t('stock.sharesHeld', { shares: stock.sharesHeld.toLocaleString('en-US') })),
+        t('stock.sharesHeld', { shares: shareText(stock.sharesHeld) })),
       stock.oversold && h('span', { class: 'row-warning' },
         icon('alert'), t('stock.oversold')),
       stock.outdated && h('span', { class: 'row-warning' },
@@ -455,11 +485,17 @@ function syncPrices(event) {
   button.querySelector('.row-subtitle').textContent = t('sync.running');
 
   return run(async () => {
+    // A stock closed by later trades keeps its saved row, but has no price to show.
+    const held = new Set(
+      state.summary.stocks.filter((stock) => stock.fromHolding).map((stock) => stock.ticker),
+    );
     const { prices, failed } = await state.store.fetchPrices();
-    const changes = Object.entries(prices).map(([ticker, price]) => ({ ticker, price }));
+    const changes = Object.entries(prices)
+      .filter(([ticker]) => held.has(ticker))
+      .map(([ticker, price]) => ({ ticker, price }));
     if (changes.length === 0) throw new Error(t('sync.none'));
     await state.store.setPrices(changes);
-    return { updated: changes.length, failed };
+    return { updated: changes.length, failed: failed.filter((ticker) => held.has(ticker)) };
   }, ({ updated, failed }) => [
     plural('sync.done', updated),
     failed.length > 0 && t('sync.missed', { tickers: failed.join(', ') }),
@@ -500,7 +536,7 @@ function matchesTradeFilters(tx) {
 
 function tradeRow(tx, rerender) {
   const label = [typeLabel(tx.type), tx.ticker].filter(Boolean).join(' ');
-  const cents = Math.round(Number(tx.amount_usd) * 100);
+  const cents = toCents(tx.amount_usd);
   const isOpen = state.openTrade === tx.id;
 
   return h('li', { class: 'trade' },
@@ -521,7 +557,7 @@ function tradeRow(tx, rerender) {
       h('span', { class: 'row-subtitle' }, formats.date.format(new Date(tx.occurred_at)))),
     h('span', { class: `row-amount ${cents > 0 ? 'gain' : ''}` }, signedMoney(cents))),
     isOpen && h('div', { class: 'trade-detail' },
-      tx.shares && h('p', {}, t('trade.shares', { shares: Number(tx.shares).toLocaleString('en-US') })),
+      tx.shares && h('p', {}, t('trade.shares', { shares: shareText(Number(tx.shares)) })),
       tx.note && h('p', {}, tx.note),
       h('button', {
         class: 'text-button destructive',
@@ -638,7 +674,10 @@ function submitTrade(event) {
 
   const [found] = findDuplicates([row], state.transactions);
   if (fillsShares(row, found)) {
-    run(() => state.store.importRows([row]), (saved) => importedText(saved, 1));
+    run(() => state.store.importRows([row]), (saved) => {
+      state.manualTrade = null;
+      return importedText(saved, 1);
+    });
     return;
   }
   if (found?.kind === 'same') {
@@ -646,7 +685,12 @@ function submitTrade(event) {
     render();
     return;
   }
-  if (confirmSimilar([row])) run(() => state.store.add(row), t('trade.added'));
+  if (confirmSimilar([row])) {
+    run(() => state.store.add(row), () => {
+      state.manualTrade = null;
+      return t('trade.added');
+    });
+  }
 }
 
 function formRow(label, control) {
@@ -682,6 +726,8 @@ function tradeImport() {
     event.target.value = '';
     if (files.length === 0) return;
 
+    state.readingImages = true;
+    event.target.disabled = true;
     show(t('image.loading'));
     try {
       const images = await readTradeImages(files, (current) => {
@@ -696,13 +742,15 @@ function tradeImport() {
 
       state.tradeDraft = rows;
       state.tradeNote = plural('tradeImage.read', rows.length);
-      render();
     } catch (error) {
       show(`${t('image.failed')} ${describeError(error)}`);
+    } finally {
+      state.readingImages = false;
+      render();
     }
   };
 
-  return h('div', { class: 'card' },
+  return section(null, h('div', { class: 'card' },
     note,
     h('label', { class: 'row row-button action' }, t('image.import'), h('input', {
       class: 'file-input',
@@ -710,22 +758,20 @@ function tradeImport() {
       accept: 'image/*',
       multiple: true,
       'aria-label': t('image.import'),
+      disabled: state.readingImages,
       onChange: importImages,
-    })));
+    }))), t('tradeImage.overlap'));
 }
 
-// A doubt about a row clears only when a field that settles it changes, or when
-// the viewer says the row is right.
-const CHECKS = {
-  amount: { fields: ['amount', 'type'], text: () => t('tradeImage.checkAmount') },
-  date: { fields: ['date'], text: () => t('tradeImage.checkDate') },
-  ticker: { fields: ['ticker'], text: () => t('tradeImage.checkTicker') },
-  figures: { fields: ['shares', 'perShare', 'total'], text: () => t('holdings.checkFigures') },
+const CHECK_TEXT = {
+  amount: () => t('tradeImage.checkAmount'),
+  date: () => t('tradeImage.checkDate'),
+  ticker: () => t('tradeImage.checkTicker'),
+  figures: () => t('holdings.checkFigures'),
 };
 
 const checksOf = (row) => (row.dataset.checks || '').split(' ').filter(Boolean);
-const unsettled = (row, field) => checksOf(row)
-  .filter((check) => !CHECKS[check].fields.includes(field));
+const unsettled = (row, field) => settleChecks(checksOf(row), field);
 
 function showChecks(row, checks) {
   row.dataset.checks = checks.join(' ');
@@ -733,7 +779,7 @@ function showChecks(row, checks) {
   row.querySelector('.holding-checked').hidden = checks.length === 0;
   if (checks.length > 0) {
     const hint = row.querySelector('.holding-hint');
-    hint.textContent = checks.map((check) => CHECKS[check].text()).join(' · ');
+    hint.textContent = checks.map((check) => CHECK_TEXT[check]()).join(' · ');
     hint.hidden = false;
   }
 }
@@ -765,6 +811,31 @@ function settleRow(row, field) {
   showChecks(row, unsettled(row, field));
 }
 
+function markRow(row, message) {
+  row.classList.add('bad');
+  const hint = row.querySelector('.holding-hint');
+  hint.textContent = message;
+  hint.hidden = false;
+}
+
+const tickerInput = (value) => h('input', {
+  class: 'holding-ticker',
+  name: 'ticker',
+  value: value ?? '',
+  placeholder: t('form.ticker'),
+  'aria-label': t('form.ticker'),
+  autocapitalize: 'characters',
+  autocomplete: 'off',
+  maxlength: 10,
+});
+
+const removeButton = (onClick) => h('button', {
+  class: 'holding-remove',
+  type: 'button',
+  'aria-label': t('holdings.remove'),
+  onClick,
+}, icon('close'));
+
 function reviewRow(entry, onRemove, onChecked) {
   const hint = h('p', { class: 'holding-hint', hidden: true });
   const match = h('p', { class: 'holding-match', hidden: true });
@@ -773,19 +844,13 @@ function reviewRow(entry, onRemove, onChecked) {
   const refresh = () => {
     const type = fieldOf(row, 'type').value;
     fieldOf(row, 'ticker').hidden = !needsTicker(type);
-    fieldOf(row, 'shares').closest('label').hidden = !['buy', 'sell'].includes(type);
+    fieldOf(row, 'shares').closest('label').hidden = !usesShares(type);
     if (!needsTicker(type)) settle('ticker');
   };
 
-  const checks = entry.checks ?? [
-    entry.checkAmount && 'amount',
-    entry.checkDate && 'date',
-    entry.checkTicker && 'ticker',
-  ].filter(Boolean);
-
   const row = h('li', {
     class: 'holding',
-    'data-checks': checks.join(' '),
+    'data-checks': firstChecks(entry).join(' '),
     onInput: (event) => settle(event.target.name),
     onChange: refresh,
   },
@@ -795,22 +860,8 @@ function reviewRow(entry, onRemove, onChecked) {
         value,
         selected: value === entry.type,
       }, typeLabel(value)))),
-    h('input', {
-      class: 'holding-ticker',
-      name: 'ticker',
-      value: entry.ticker ?? '',
-      placeholder: t('form.ticker'),
-      'aria-label': t('form.ticker'),
-      autocapitalize: 'characters',
-      autocomplete: 'off',
-      maxlength: 10,
-    }),
-    h('button', {
-      class: 'holding-remove',
-      type: 'button',
-      'aria-label': t('holdings.remove'),
-      onClick: () => onRemove(row),
-    }, icon('close'))),
+    tickerInput(entry.ticker),
+    removeButton(() => onRemove(row))),
   hint,
   checkedButton(() => {
     const ticker = checksOf(row).includes('ticker') ? tickerOf(row) : '';
@@ -863,7 +914,10 @@ function matchText(row, found) {
 }
 
 function tradeReview() {
+  let typing = null;
+
   const finish = () => {
+    clearTimeout(typing);
     state.tradeDraft = [];
     state.tradeNote = '';
   };
@@ -912,8 +966,16 @@ function tradeReview() {
   };
 
   const update = () => {
+    clearTimeout(typing);
+    if (!list.isConnected) return;
     saveDraft();
     showProgress();
+  };
+
+  // Each update rereads every row, so typing waits for a pause.
+  const typed = () => {
+    clearTimeout(typing);
+    typing = setTimeout(update, TYPING_PAUSE_MS);
   };
 
   // Checking a ticker once vouches for it on every row that reads the same.
@@ -952,12 +1014,7 @@ function tradeReview() {
       .map(({ error }, index) => ({ error, index }))
       .filter(({ error }) => error);
     if (problems.length > 0) {
-      for (const { error, index } of problems) {
-        items[index].classList.add('bad');
-        const hint = items[index].querySelector('.holding-hint');
-        hint.textContent = error;
-        hint.hidden = false;
-      }
+      problems.forEach(({ error, index }) => markRow(items[index], error));
       items[problems[0].index].scrollIntoView({ block: 'center' });
       return;
     }
@@ -973,15 +1030,18 @@ function tradeReview() {
 
   showProgress();
 
-  return h('form', { class: 'stack', onSubmit: submit, onInput: update, onChange: update },
+  return h('form', { class: 'stack', onSubmit: submit, onInput: typed, onChange: update },
     section(null, h('div', { class: 'card' }, note, matches, list), t('tradeImage.footer')),
     save,
     h('button', { class: 'text-button', type: 'button', onClick: cancel }, t('tradeImage.cancel')));
 }
 
 function tradeForm() {
+  const draft = state.manualTrade ?? {};
+
   const ticker = formRow(t('form.ticker'), h('input', {
     name: 'ticker',
+    value: draft.ticker,
     placeholder: t('form.required'),
     autocapitalize: 'characters',
     autocomplete: 'off',
@@ -989,6 +1049,7 @@ function tradeForm() {
   }));
   const shares = formRow(t('form.shares'), h('input', {
     name: 'shares',
+    value: draft.shares,
     type: 'number',
     step: 'any',
     min: '0',
@@ -1000,20 +1061,29 @@ function tradeForm() {
     ticker.hidden = !needsTicker(type);
     ticker.querySelector('input').required = needsTicker(type);
     // Holdings carry on from each trade, which takes a share count.
-    shares.hidden = !['buy', 'sell'].includes(type);
+    shares.hidden = !usesShares(type);
     shares.querySelector('input').required = !shares.hidden;
   };
-  syncFields('buy');
+  syncFields(draft.type ?? 'buy');
 
-  return h('form', { class: 'stack', onSubmit: submitTrade },
+  // Rendering rebuilds the form, so what's typed has to live outside it.
+  const keepDraft = (event) => {
+    state.manualTrade = Object.fromEntries(new FormData(event.currentTarget));
+  };
+
+  return h('form', { class: 'stack', onSubmit: submitTrade, onInput: keepDraft },
     section(null, h('div', { class: 'card' },
       formRow(t('form.type'), h('select', {
         name: 'type',
         onChange: (event) => syncFields(event.target.value),
-      }, TRADE_TYPES.map((value) => h('option', { value }, typeLabel(value))))),
+      }, TRADE_TYPES.map((value) => h('option', {
+        value,
+        selected: value === draft.type,
+      }, typeLabel(value))))),
       ticker,
       formRow(t('form.amount'), h('input', {
         name: 'amount',
+        value: draft.amount,
         type: 'number',
         step: '0.01',
         min: '0.01',
@@ -1027,11 +1097,11 @@ function tradeForm() {
         name: 'occurred_at',
         type: 'datetime-local',
         step: '1',
-        value: bangkokNowForInput(),
+        value: draft.occurred_at ?? bangkokNowForInput(),
         required: true,
       })),
       formRow(t('form.note'), h('input', {
-        name: 'note', maxlength: 500, placeholder: t('form.optional'),
+        name: 'note', value: draft.note, maxlength: 500, placeholder: t('form.optional'),
       }))),
     t('form.timezone')),
     h('button', { class: 'capsule wide', type: 'submit' }, t('form.save')));
@@ -1157,7 +1227,7 @@ function holdingRow(saved, entry, onRemove, onChecked) {
     const held = saved[ticker];
     hint.hidden = ticker === '';
     hint.textContent = held
-      ? t('holdings.heldHint', { shares: held.shares.toLocaleString('en-US') })
+      ? t('holdings.heldHint', { shares: shareText(held.shares) })
       : t('holdings.newHint');
     fieldOf(row, 'shares').placeholder = held?.shares ?? t('form.required');
     fieldOf(row, 'perShare').placeholder = held?.perShare ?? t('form.optional');
@@ -1166,7 +1236,7 @@ function holdingRow(saved, entry, onRemove, onChecked) {
 
     const field = event?.target.name;
     const checks = unsettled(row, field);
-    const recheck = CHECKS.figures.fields.includes(field) && figuresOff(row);
+    const recheck = CHECK_FIELDS.figures.includes(field) && figuresOff(row);
     showChecks(row, recheck ? [...checks, 'figures'] : checks);
   };
 
@@ -1176,22 +1246,8 @@ function holdingRow(saved, entry, onRemove, onChecked) {
     onInput: refresh,
   },
     h('div', { class: 'holding-head' },
-      h('input', {
-        class: 'holding-ticker',
-        name: 'ticker',
-        value: entry.ticker ?? '',
-        placeholder: t('form.ticker'),
-        'aria-label': t('form.ticker'),
-        autocapitalize: 'characters',
-        autocomplete: 'off',
-        maxlength: 10,
-      }),
-      h('button', {
-        class: 'holding-remove',
-        type: 'button',
-        'aria-label': t('holdings.remove'),
-        onClick: () => onRemove(row),
-      }, icon('close'))),
+      tickerInput(entry.ticker),
+      removeButton(() => onRemove(row))),
     hint,
     checkedButton(() => {
       row.dataset.checks = '';
@@ -1221,6 +1277,7 @@ function savedHoldings() {
     {
       shares: stock.sharesHeld,
       total: stock.costLeft / 100,
+      price: stock.price,
       outdated: stock.outdated,
       perShare: Math.round((stock.costLeft / stock.sharesHeld) * 100) / 10000,
       unrealized: stock.unrealized === null ? undefined : stock.unrealized / 100,
@@ -1235,11 +1292,12 @@ function changeLine(row, held) {
   } = row;
   if (!held) {
     return t('holdings.newLine', {
-      ticker, shares: shares.toLocaleString('en-US'), cost: money(toCents(total)),
+      ticker, shares: shareText(shares), cost: money(toCents(total)),
     });
   }
 
-  const result = price === undefined ? held.unrealized : toCents(price * shares - total) / 100;
+  const current = price ?? held.price;
+  const result = current === null ? undefined : toCents(current * shares - total) / 100;
   const resultText = (value) => (value === undefined ? '—' : signedMoney(toCents(value)));
   const changes = [
     shares !== held.shares && t('holdings.sharesChange', { from: held.shares, to: shares }),
@@ -1295,12 +1353,7 @@ function holdingsForm() {
 
   const markProblems = (problems) => {
     const rows = [...list.children];
-    for (const { index, message } of problems) {
-      rows[index].classList.add('bad');
-      const hint = rows[index].querySelector('.holding-hint');
-      hint.textContent = message;
-      hint.hidden = false;
-    }
+    problems.forEach(({ index, message }) => markRow(rows[index], message));
     if (problems.length > 0) rows[problems[0].index].scrollIntoView({ block: 'center' });
   };
 
@@ -1510,6 +1563,7 @@ async function start() {
     setTimeout(() => {
       if (!session) {
         openedFor = null;
+        clearAccount();
         renderLogin();
       } else if (openedFor !== session.user.id) {
         openedFor = session.user.id;

@@ -7,6 +7,7 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 const ALLOWED_ORIGINS = ['https://sumet-funan.github.io', 'http://localhost:4173'];
 const QUOTE_TIMEOUT_MS = 8000;
+const QUOTES_AT_ONCE = 5;
 
 function corsHeaders(request: Request) {
   const origin = request.headers.get('Origin') ?? '';
@@ -47,6 +48,15 @@ async function quote(ticker: string): Promise<number | null> {
   }
 }
 
+// A few at a time, because the market site limits bursts from shared addresses.
+async function quotes(tickers: string[]): Promise<(number | null)[]> {
+  const results: (number | null)[] = [];
+  for (let i = 0; i < tickers.length; i += QUOTES_AT_ONCE) {
+    results.push(...await Promise.all(tickers.slice(i, i + QUOTES_AT_ONCE).map(quote)));
+  }
+  return results;
+}
+
 Deno.serve(async (request) => {
   const cors = corsHeaders(request);
   const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -59,11 +69,11 @@ Deno.serve(async (request) => {
   const tickers = await heldTickers(request.headers.get('Authorization') ?? '');
   if (tickers === null) return reply({ error: 'Not signed in' }, 401);
 
-  const quotes = await Promise.all(tickers.map(quote));
+  const results = await quotes(tickers);
   const prices: Record<string, number> = {};
   const failed: string[] = [];
   tickers.forEach((ticker, index) => {
-    const price = quotes[index];
+    const price = results[index];
     if (price === null) failed.push(ticker);
     else prices[ticker] = price;
   });

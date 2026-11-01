@@ -1,7 +1,7 @@
 // Pure calculations, kept free of the DOM and Supabase so they can be unit tested.
 // All money is handled in integer cents to avoid floating point drift.
 
-const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
+export const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
 const FEE_TYPES = new Set(['fee_sec', 'fee_taf', 'fee_cat']);
 const MONEY_MOVE_TYPES = new Set(['deposit', 'withdrawal', 'fx_in', 'fx_out']);
 const EPSILON_SHARES = 0.000001;

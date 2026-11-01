@@ -6,7 +6,7 @@ import {
 
 test('reads an amount line', () => {
   assert.deepEqual(readAmountLine('AAAA -12.34 USD'), {
-    sign: '-', amount: 12.34, label: 'AAAA', knownLabel: false, noComma: false,
+    sign: '-', amount: 12.34, word: 'AAAA', label: 'AAAA', knownLabel: false, noComma: false,
   });
   assert.equal(readAmountLine('+2,345.00 USD').amount, 2345);
   assert.equal(readAmountLine('12.34 THB'), null);
@@ -182,6 +182,34 @@ test('a row with neither a ticker nor a title is marked', () => {
   const row = rowFrom('-10.00 USD', 'xx');
   assert.equal(row.type, 'withdrawal');
   assert.equal(row.checkAmount, true);
+});
+
+const tickerRow = (text, ticker, known = []) => readTradeRows([[{
+  line: text, ticker, digits: '5 0.0. 69 - 10:00:00', month: 'มิ.ย.', thai: 'ซื้อ',
+}]], known)[0];
+
+test('two readings that agree need no known ticker', () => {
+  const row = tickerRow('0 AAAA -10.00 USD', 'AAAA');
+  assert.equal(row.ticker, 'AAAA');
+  assert.equal(row.checkTicker, false);
+});
+
+test('a reading with a clipped first letter is not trusted', () => {
+  const row = tickerRow('0AAAA -10.00 USD', 'AAA');
+  assert.equal(row.ticker, '0AAAA');
+  assert.equal(row.checkTicker, true);
+});
+
+test('readings that disagree stay marked', () => {
+  const row = tickerRow('0 AAAA -10.00 USD', 'BBBB');
+  assert.equal(row.ticker, 'AAAA');
+  assert.equal(row.checkTicker, true);
+});
+
+test('a reading that matches only the end of a longer word stays marked', () => {
+  const row = tickerRow('0 AAZZ -10.00 USD', 'ZZ');
+  assert.equal(row.ticker, 'AAZZ');
+  assert.equal(row.checkTicker, true);
 });
 
 test('a sale with no sign read stays a sale and is marked', () => {

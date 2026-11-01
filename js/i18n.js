@@ -48,8 +48,8 @@ export const messages = {
     'error.more': ' and {count} more',
 
     'empty.title': 'Your story starts here',
-    'empty.text': 'Import your trade history to bring this place to life.',
-    'empty.action': 'Import trades',
+    'empty.text': 'Add your trades or holdings to bring this place to life.',
+    'empty.action': 'Add now',
 
     'priced.all': 'All stocks priced',
     'priced.some': '{priced} of {held} stocks priced',
@@ -202,6 +202,7 @@ export const messages = {
     'image.failed': 'Couldn’t read the image.',
 
     'tradeImage.none': 'No trades found. Use a screenshot of the รายการ screen in Dime.',
+    'tradeImage.overlap': 'Let screenshots overlap by a row, so nothing is cut off at the edge.',
     'tradeImage.read.one': 'Read {count} row.',
     'tradeImage.read.many': 'Read {count} rows.',
     'tradeImage.doubtful': '{count} marked in red need checking.',
@@ -296,8 +297,8 @@ export const messages = {
     'error.more': ' และอีก {count} รายการ',
 
     'empty.title': 'เรื่องราวของคุณเริ่มที่นี่',
-    'empty.text': 'นำเข้าประวัติการซื้อขายเพื่อเริ่มใช้งาน',
-    'empty.action': 'นำเข้ารายการ',
+    'empty.text': 'เพิ่มรายการหรือหุ้นที่ถืออยู่เพื่อเริ่มใช้งาน',
+    'empty.action': 'เพิ่มเลย',
 
     'priced.all': 'มีราคาครบทุกตัว',
     'priced.some': 'มีราคา {priced} จาก {held} ตัว',
@@ -450,6 +451,7 @@ export const messages = {
     'image.failed': 'อ่านภาพไม่สำเร็จ',
 
     'tradeImage.none': 'ไม่พบรายการในภาพ โปรดใช้ภาพหน้า รายการ ใน Dime',
+    'tradeImage.overlap': 'ควรให้ภาพแต่ละใบซ้อนกันอย่างน้อย 1 แถว เพื่อไม่ให้รายการถูกตัดที่ขอบจอ',
     'tradeImage.read.one': 'อ่านได้ {count} แถว',
     'tradeImage.read.many': 'อ่านได้ {count} แถว',
     'tradeImage.doubtful': 'มี {count} แถวในกรอบแดงที่ต้องตรวจ',

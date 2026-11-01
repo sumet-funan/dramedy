@@ -292,3 +292,25 @@ test('a backup with a bad part reports it', () => {
   );
   assert.equal(parseBackup(backupOf({ transactions: [null] })).errors.length, 1);
 });
+
+const buy = (fields) => normalizeRow({
+  occurred_at: '2026-01-02T10:00:00+07:00', type: 'buy', ticker: 'AAA', amount_usd: -10, ...fields,
+});
+
+test('a time with no zone is Bangkok time', () => {
+  assert.equal(buy({ occurred_at: '2026-01-02T10:00:00' }).row.occurred_at, '2026-01-02T03:00:00.000Z');
+  assert.equal(buy({ occurred_at: '2026-01-02T10:00' }).row.occurred_at, '2026-01-02T03:00:00.000Z');
+  assert.equal(buy({ occurred_at: '2026-01-02' }).row.occurred_at, '2026-01-01T17:00:00.000Z');
+});
+
+test('a time with a zone keeps it', () => {
+  assert.equal(buy({ occurred_at: '2026-01-02T10:00:00Z' }).row.occurred_at, '2026-01-02T10:00:00.000Z');
+});
+
+test('values the database would refuse are caught first', () => {
+  assert.ok(buy({ amount_usd: -0.004 }).error);
+  assert.ok(buy({ amount_usd: 'Infinity' }).error);
+  assert.ok(buy({ amount_usd: -1e13 }).error);
+  assert.ok(buy({ shares: 'Infinity' }).error);
+  assert.ok(buy({ shares: '1e13' }).error);
+});

@@ -1,7 +1,7 @@
 // Reads screenshots inside the browser, so they never leave the device. The
 // engine is large, so it only loads when someone picks an image.
 
-import { MONTH_LETTERS, TIME } from './trade-screen.js';
+import { MONTH_LETTERS, TIME, TRADE_TITLE } from './trade-screen.js';
 
 const ENGINE = new URL('../vendor/tesseract', import.meta.url).href;
 const SINGLE_BLOCK = '6';
@@ -23,6 +23,7 @@ async function startWorker(language) {
 const ROW_CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,+- ';
 const DATE_CHARACTERS = '0123456789:. -';
 const AMOUNT_CHARACTERS = '0123456789.,+-USD ';
+const TICKER_CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-';
 
 // Small grey text on black reads far better enlarged and as dark on light.
 function cleanedCrop(bitmap, box, scale) {
@@ -59,12 +60,14 @@ function cleanedCrop(bitmap, box, scale) {
   return canvas;
 }
 
-// Each row's amount line locates its date line below it and its Thai title to the left.
+// Each row's amount line locates its date line below it and its Thai title to the
+// left. A date cut off by the screen edge has no crop, and its row stays in the list
+// for checking, because the next screenshot may not repeat it.
 function rowCrops(bitmap, usd) {
   const height = usd.bbox.y1 - usd.bbox.y0;
   const dateTop = usd.bbox.y1 + Math.round(height * 0.55);
   const dateHeight = Math.min(Math.round(height * 1.9), bitmap.height - dateTop);
-  if (dateHeight < 8) return null;
+  const hasDate = dateHeight >= 8;
 
   const dateLeft = Math.max(0, usd.bbox.x1 - Math.round(bitmap.width * 0.346));
   const titleTop = Math.max(0, usd.bbox.y0 - Math.round(height / 3));
@@ -78,9 +81,9 @@ function rowCrops(bitmap, usd) {
   const lowerTop = dateTop + dateHeight + Math.round(height / 2);
 
   return {
-    date: cleanedCrop(bitmap, dateBox(dateTop), 3),
+    date: hasDate ? cleanedCrop(bitmap, dateBox(dateTop), 3) : null,
     // A title on two lines pushes the date one line down.
-    lowerDate: lowerTop + dateHeight <= bitmap.height
+    lowerDate: hasDate && lowerTop + dateHeight <= bitmap.height
       ? cleanedCrop(bitmap, dateBox(lowerTop), 3)
       : null,
     amount: cleanedCrop(bitmap, {
@@ -95,6 +98,13 @@ function rowCrops(bitmap, usd) {
       width: Math.round(bitmap.width * 0.34),
       height: height * 2,
     }, 2),
+    // On a buy or sell row, the ticker starts just after the short Thai word.
+    ticker: cleanedCrop(bitmap, {
+      left: Math.round(bitmap.width * 0.28),
+      top: titleTop,
+      width: Math.round(bitmap.width * 0.3),
+      height: height * 2,
+    }, 3),
   };
 }
 
@@ -102,84 +112,99 @@ async function readEach(worker, parameters, crops) {
   await worker.setParameters(parameters);
   const texts = [];
   for (const crop of crops) {
-    const { data } = await worker.recognize(crop);
+    const { data } = crop ? await worker.recognize(crop) : { data: { text: '' } };
     texts.push(data.text);
   }
   return texts;
 }
 
+async function readTradeImage(file, english, thai) {
+  const bitmap = await createImageBitmap(file);
+
+  try {
+    await english.setParameters({
+      tessedit_pageseg_mode: SINGLE_BLOCK,
+      tessedit_char_whitelist: ROW_CHARACTERS,
+    });
+    const { data } = await english.recognize(file, {}, { blocks: true });
+
+    const rows = data.blocks
+      .flatMap((block) => block.paragraphs)
+      .flatMap((paragraph) => paragraph.lines)
+      .map((line) => ({
+        line: line.text.trim(),
+        usd: line.words.find((word) => word.text.includes('USD')),
+      }))
+      .filter((row) => row.usd)
+      .map((row) => ({ ...row, crops: rowCrops(bitmap, row.usd) }));
+
+    const digitsOnly = {
+      tessedit_pageseg_mode: SINGLE_LINE,
+      tessedit_char_whitelist: DATE_CHARACTERS,
+    };
+    const dateWords = {
+      tessedit_pageseg_mode: SINGLE_LINE,
+      tessedit_char_whitelist: `${DATE_CHARACTERS}${MONTH_LETTERS}`,
+    };
+    const dates = rows.map((row) => row.crops.date);
+    const digits = await readEach(english, digitsOnly, dates);
+    const months = await readEach(thai, dateWords, dates);
+
+    const lower = rows.flatMap((row, i) => (
+      row.crops.lowerDate && !TIME.test(digits[i]) && !TIME.test(months[i]) ? [i] : []
+    ));
+    const lowerDates = lower.map((i) => rows[i].crops.lowerDate);
+    const lowerDigits = await readEach(english, digitsOnly, lowerDates);
+    const lowerMonths = await readEach(thai, dateWords, lowerDates);
+    lower.forEach((rowIndex, i) => {
+      digits[rowIndex] = lowerDigits[i];
+      months[rowIndex] = lowerMonths[i];
+    });
+
+    const amounts = await readEach(english, {
+      tessedit_pageseg_mode: SINGLE_LINE,
+      tessedit_char_whitelist: AMOUNT_CHARACTERS,
+    }, rows.map((row) => row.crops.amount));
+    const titles = (await readEach(thai, {
+      tessedit_pageseg_mode: SINGLE_LINE,
+      tessedit_char_whitelist: '',
+    }, rows.map((row) => row.crops.title))).map((title) => title.replace(/\s/g, ''));
+    const tickers = await readEach(english, {
+      tessedit_pageseg_mode: SINGLE_LINE,
+      tessedit_char_whitelist: TICKER_CHARACTERS,
+    }, rows.map((row, i) => (TRADE_TITLE.test(titles[i]) ? row.crops.ticker : null)));
+
+    return rows.map((row, i) => ({
+      line: row.line,
+      again: amounts[i].trim(),
+      ticker: tickers[i].trim(),
+      digits: digits[i].trim(),
+      month: months[i].trim(),
+      thai: titles[i],
+    }));
+  } finally {
+    bitmap.close();
+  }
+}
+
 // Returns what each screenshot's rows say. Making sense of it is left to
 // trade-screen.js, so that part can be tested without images.
 export async function readTradeImages(files, onProgress) {
-  const english = await startWorker('eng');
-  const thai = await startWorker('tha');
+  let english;
+  let thai;
 
   try {
+    english = await startWorker('eng');
+    thai = await startWorker('tha');
+
     const images = [];
     for (const [index, file] of files.entries()) {
       onProgress(index + 1);
-      const bitmap = await createImageBitmap(file);
-      await english.setParameters({
-        tessedit_pageseg_mode: SINGLE_BLOCK,
-        tessedit_char_whitelist: ROW_CHARACTERS,
-      });
-      const { data } = await english.recognize(file, {}, { blocks: true });
-
-      const rows = data.blocks
-        .flatMap((block) => block.paragraphs)
-        .flatMap((paragraph) => paragraph.lines)
-        .map((line) => ({
-          line: line.text.trim(),
-          usd: line.words.find((word) => word.text.includes('USD')),
-        }))
-        .filter((row) => row.usd)
-        .map((row) => ({ ...row, crops: rowCrops(bitmap, row.usd) }))
-        .filter((row) => row.crops);
-
-      const digitsOnly = {
-        tessedit_pageseg_mode: SINGLE_LINE,
-        tessedit_char_whitelist: DATE_CHARACTERS,
-      };
-      const dateWords = {
-        tessedit_pageseg_mode: SINGLE_LINE,
-        tessedit_char_whitelist: `${DATE_CHARACTERS}${MONTH_LETTERS}`,
-      };
-      const dates = rows.map((row) => row.crops.date);
-      const digits = await readEach(english, digitsOnly, dates);
-      const months = await readEach(thai, dateWords, dates);
-
-      const lower = rows.flatMap((row, i) => (
-        row.crops.lowerDate && !TIME.test(digits[i]) && !TIME.test(months[i]) ? [i] : []
-      ));
-      const lowerDates = lower.map((i) => rows[i].crops.lowerDate);
-      const lowerDigits = await readEach(english, digitsOnly, lowerDates);
-      const lowerMonths = await readEach(thai, dateWords, lowerDates);
-      lower.forEach((rowIndex, i) => {
-        digits[rowIndex] = lowerDigits[i];
-        months[rowIndex] = lowerMonths[i];
-      });
-
-      const amounts = await readEach(english, {
-        tessedit_pageseg_mode: SINGLE_LINE,
-        tessedit_char_whitelist: AMOUNT_CHARACTERS,
-      }, rows.map((row) => row.crops.amount));
-      const titles = await readEach(thai, {
-        tessedit_pageseg_mode: SINGLE_LINE,
-        tessedit_char_whitelist: '',
-      }, rows.map((row) => row.crops.title));
-
-      bitmap.close();
-      images.push(rows.map((row, i) => ({
-        line: row.line,
-        again: amounts[i].trim(),
-        digits: digits[i].trim(),
-        month: months[i].trim(),
-        thai: titles[i].replace(/\s/g, ''),
-      })));
+      images.push(await readTradeImage(file, english, thai));
     }
     return images;
   } finally {
-    await english.terminate();
-    await thai.terminate();
+    await english?.terminate();
+    await thai?.terminate();
   }
 }
