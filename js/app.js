@@ -42,6 +42,9 @@ const VIEWS = [
 ];
 
 const STOCK_FILTERS = ['all', 'review', 'holding', 'sold'];
+const HELP_TERMS = [
+  'perShare', 'total', 'price', 'value', 'trades', 'unrealized', 'realized', 'status',
+];
 const ADD_MODES = ['trade', 'holdings'];
 
 // Long enough for a browser to finish fetching a saved file.
@@ -57,6 +60,7 @@ const state = {
   email: '',
   view: 'overview',
   stockFilter: 'all',
+  stockHelpOpen: false,
   addMode: 'trade',
   holdingDraft: [],
   holdingNote: '',
@@ -535,6 +539,23 @@ function syncButton() {
         : t('sync.never'))));
 }
 
+// One note for the whole list, because a card has no room to explain itself and a
+// touch screen has no hover.
+function stockHelp() {
+  return h('details', {
+    class: 'card help',
+    open: state.stockHelpOpen,
+    onToggle: (event) => {
+      state.stockHelpOpen = event.target.open;
+    },
+  },
+  h('summary', {}, icon('info'), t('help.title')),
+  h('dl', {}, HELP_TERMS.map((term) => h('div', {},
+    h('dt', {}, t(`help.${term}.term`)),
+    h('dd', {}, t(`help.${term}.text`))))),
+  h('p', { class: 'help-sum' }, t('help.sum')));
+}
+
 function renderStocks() {
   const stocks = state.summary.stocks.filter(
     (stock) => state.stockFilter === 'all' || stock.status === state.stockFilter,
@@ -545,6 +566,7 @@ function renderStocks() {
     segmented(t('filter.label'), STOCK_FILTERS, state.stockFilter, (filter) => t(`filter.${filter}`), (filter) => {
       state.stockFilter = filter;
     }),
+    state.summary.heldCount > 0 && stockHelp(),
     stocks.length > 0
       ? h('ul', { class: 'card' }, stocks.map(stockRow))
       : h('div', { class: 'card card-note' }, t('filter.empty')));

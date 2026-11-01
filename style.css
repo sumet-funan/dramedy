@@ -1331,3 +1331,57 @@ label.row:focus-within {
 .holding-head .holding-remove {
   margin-left: auto;
 }
+
+/* Notes on what the stock figures mean */
+.help {
+  padding: 0 16px;
+}
+
+.help summary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tint);
+  cursor: pointer;
+}
+
+.help summary .icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.help summary:focus-visible {
+  outline: 2px solid var(--tint);
+  outline-offset: 2px;
+}
+
+.help dl {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 0;
+  padding-top: 10px;
+  border-top: 0.5px solid var(--separator);
+}
+
+.help dt {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.help dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.help-sum {
+  margin: 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
