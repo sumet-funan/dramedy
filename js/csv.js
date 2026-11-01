@@ -72,15 +72,25 @@ export function normalizeRow(input) {
 
 // Despite its name, the broker's "มูลค่า" line is profit or loss on the shares
 // held, not their value. Adding it to the cost gives the value, and so the price.
-const impliedPrice = ({ shares, total, unrealized }) => (
-  Math.round(((total + unrealized) / shares) * 1e6) / 1e6
-);
+const impliedPrice = ({ shares, total, unrealized }) => (total + unrealized) / shares;
 
-// A blank total comes from the cost per share, which is rounded, so a total the
-// broker gives is always preferred.
+const placesOf = (text) => text.split('.')[1]?.length ?? 0;
+
+// Binary floats turn 3 × 1.1111 into 3.3333000000000004, so the digits are multiplied
+// as whole numbers and nothing is rounded.
+function multiplyExactly(first, second) {
+  const [a, b] = [String(first), String(second)];
+  if (/e/i.test(a + b)) return first * second;
+
+  const digits = BigInt(a.replace('.', '')) * BigInt(b.replace('.', ''));
+  return Number(digits) / 10 ** (placesOf(a) + placesOf(b));
+}
+
+// A blank total comes from the cost per share, so a total the broker gives is
+// always preferred.
 function costFrom(entry, shares, held) {
   if (entry.total !== '') return Number(entry.total);
-  if (entry.perShare !== '') return roundCents(shares * Number(entry.perShare));
+  if (entry.perShare !== '') return multiplyExactly(shares, entry.perShare);
   return held?.total;
 }
 
@@ -123,6 +133,7 @@ export function readHoldings(entries, saved = {}) {
     // Only a full set of figures describes the holding at a moment in time. A row
     // with just a result changes the price, and the holding itself stays as it is.
     const row = { ticker, shares, total_cost_usd: total };
+    if (entry.perShare !== '') row.cost_per_share_usd = Number(entry.perShare);
     if (!hasShares && !hasCost) row.priceOnly = true;
     else if (held && !(hasShares && hasCost)) row.partial = true;
     return hasResult
@@ -132,8 +143,6 @@ export function readHoldings(entries, saved = {}) {
 
   return { rows, errors: problems.map((problem) => problem.message), problems };
 }
-
-const roundCents = (value) => Math.round(value * 100) / 100;
 
 // Shares times cost per share gives the total, so a mistyped figure leaves the
 // three disagreeing. The cost per share is rounded, which adds up on a large holding.
@@ -236,6 +245,7 @@ export function toBackup({ transactions, holdings, statuses }, exportedAt) {
 const validHolding = (row) => TICKER_PATTERN.test(row?.ticker)
   && row.shares > 0
   && row.total_cost_usd >= 0
+  && (row.cost_per_share_usd ?? 0) >= 0
   && !Number.isNaN(Date.parse(row.updated_at))
   && (row.current_price_usd ?? 0) >= 0;
 
@@ -275,6 +285,7 @@ export function parseBackup(text) {
       ticker: row.ticker,
       shares: row.shares,
       total_cost_usd: row.total_cost_usd,
+      cost_per_share_usd: row.cost_per_share_usd ?? null,
       updated_at: row.updated_at,
       current_price_usd: row.current_price_usd ?? null,
       price_updated_at: row.price_updated_at ?? null,

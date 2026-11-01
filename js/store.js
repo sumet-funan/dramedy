@@ -50,7 +50,7 @@ export function createSupabaseStore(client, userId) {
       const [statusResult, holdingResult] = await Promise.all([
         client.from('stock_status').select('ticker, status'),
         client.from('holdings')
-          .select('ticker, shares, total_cost_usd, updated_at, current_price_usd, price_updated_at'),
+          .select('ticker, shares, total_cost_usd, cost_per_share_usd, updated_at, current_price_usd, price_updated_at'),
       ]);
       if (statusResult.error) throw statusResult.error;
       if (holdingResult.error) throw holdingResult.error;
@@ -103,9 +103,14 @@ export function createSupabaseStore(client, userId) {
       if (figures.length > 0) {
         const saved = await client.from('holdings').upsert(
           figures.map(({
-            ticker, shares, total_cost_usd, partial,
+            ticker, shares, total_cost_usd, cost_per_share_usd, partial,
           }) => ({
-            ticker, shares, total_cost_usd, user_id: userId, updated_at: partial ? now : takenAt,
+            ticker,
+            shares,
+            total_cost_usd,
+            cost_per_share_usd: cost_per_share_usd ?? null,
+            user_id: userId,
+            updated_at: partial ? now : takenAt,
           })),
         );
         if (saved.error) throw saved.error;
@@ -202,6 +207,7 @@ export function createDemoStore({ transactions, statuses, holdings }) {
           ...(priceOnly ? {
             shares: before.shares,
             total_cost_usd: before.total_cost_usd,
+            cost_per_share_usd: before.cost_per_share_usd ?? null,
           } : {}),
           updated_at: priceOnly ? before.updated_at : (partial ? now : takenAt),
         };

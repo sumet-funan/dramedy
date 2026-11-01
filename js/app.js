@@ -96,7 +96,21 @@ function h(tag, props = {}, ...children) {
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const money = (cents) => usd.format(cents / 100);
-const shareText = (shares) => shares.toLocaleString('en-US', { maximumFractionDigits: 6 });
+const shareText = (shares) => shares.toLocaleString('en-US', { maximumSignificantDigits: 15 });
+
+// Shows every digit a figure has, with at least the two of a dollar amount.
+function exactMoney(value) {
+  const places = Math.max(2, String(value).split('.')[1]?.length ?? 0);
+  return `$${value.toLocaleString('en-US', {
+    minimumFractionDigits: places,
+    maximumFractionDigits: places,
+  })}`;
+}
+
+const signedExact = (value) => {
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  return `${sign}${exactMoney(Math.abs(value))}`;
+};
 const signedMoney = (cents) => `${cents > 0 ? '+' : ''}${money(cents)}`;
 const toneOf = (cents) => (cents > 0 ? 'gain' : cents < 0 ? 'loss' : '');
 
@@ -123,9 +137,10 @@ function makeFormats() {
 
 let formats = makeFormats();
 
+// A price worked out from a result is a division that may never end.
 const priceText = (price) => `$${price.toLocaleString('en-US', {
   minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
+  maximumFractionDigits: 6,
 })}`;
 const monthDate = (key) => new Date(`${key}-01T00:00:00Z`);
 const monthLabel = (key) => formats.month.format(monthDate(key));
@@ -392,7 +407,7 @@ function confirmSold(stock) {
   return confirm(t('status.confirmSold', {
     ticker: stock.ticker,
     shares: shareText(stock.sharesHeld),
-    cost: money(stock.costLeft),
+    cost: exactMoney(stock.totalCost),
   }));
 }
 
@@ -419,16 +434,22 @@ function statusPicker(stock) {
   h('option', { value: 'sold', selected: stock.status === 'sold' }, t('status.sold')));
 }
 
+// With no cost per share given, the broker's four decimal places are the nearest
+// a division can come.
+const costPerShare = (stock) => stock.perShare
+  ?? Number((stock.totalCost / stock.sharesHeld).toFixed(4));
+
 function heldFacts(stock) {
   return t('stock.held', {
     shares: shareText(stock.sharesHeld),
-    cost: money(Math.round(stock.costLeft / stock.sharesHeld)),
+    cost: exactMoney(costPerShare(stock)),
+    total: exactMoney(stock.totalCost),
   });
 }
 
 function priceFacts(stock) {
   if (stock.price === null) return t('stock.noPrice');
-  const facts = { price: priceText(stock.price), value: money(stock.marketValue) };
+  const facts = { price: priceText(stock.price), value: exactMoney(stock.valueUsd) };
   return stock.priceUpdatedAt
     ? t('stock.priceOn', { ...facts, day: formats.day.format(new Date(stock.priceUpdatedAt)) })
     : t('stock.price', facts);
@@ -439,7 +460,7 @@ function stockAmounts(stock) {
     const hasPrice = stock.unrealized !== null;
     return [
       h('span', { class: `row-amount ${hasPrice ? toneOf(stock.unrealized) : ''}` },
-        hasPrice ? signedMoney(stock.unrealized) : money(stock.costLeft)),
+        hasPrice ? signedExact(stock.unrealizedUsd) : exactMoney(stock.totalCost)),
       h('span', { class: 'row-subtitle' }, t(hasPrice ? 'stock.unrealized' : 'stock.invested')),
       stock.realized !== null && h('span', { class: `row-amount small ${toneOf(stock.realized)}` },
         signedMoney(stock.realized)),
@@ -1276,11 +1297,11 @@ function savedHoldings() {
     stock.ticker,
     {
       shares: stock.sharesHeld,
-      total: stock.costLeft / 100,
+      total: stock.totalCost,
       price: stock.price,
       outdated: stock.outdated,
-      perShare: Math.round((stock.costLeft / stock.sharesHeld) * 100) / 10000,
-      unrealized: stock.unrealized === null ? undefined : stock.unrealized / 100,
+      perShare: costPerShare(stock),
+      unrealized: stock.unrealizedUsd ?? undefined,
     },
   ]));
 }
@@ -1292,17 +1313,17 @@ function changeLine(row, held) {
   } = row;
   if (!held) {
     return t('holdings.newLine', {
-      ticker, shares: shareText(shares), cost: money(toCents(total)),
+      ticker, shares: shareText(shares), cost: exactMoney(total),
     });
   }
 
   const current = price ?? held.price;
-  const result = current === null ? undefined : toCents(current * shares - total) / 100;
-  const resultText = (value) => (value === undefined ? '—' : signedMoney(toCents(value)));
+  const result = current === null ? undefined : Number((current * shares - total).toFixed(10));
+  const resultText = (value) => (value === undefined ? '—' : signedExact(value));
   const changes = [
     shares !== held.shares && t('holdings.sharesChange', { from: held.shares, to: shares }),
-    toCents(total) !== toCents(held.total) && t('holdings.costChange', {
-      from: money(toCents(held.total)), to: money(toCents(total)),
+    total !== held.total && t('holdings.costChange', {
+      from: exactMoney(held.total), to: exactMoney(total),
     }),
     result !== held.unrealized && t('holdings.resultChange', {
       from: resultText(held.unrealized), to: resultText(result),

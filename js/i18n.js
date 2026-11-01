@@ -92,7 +92,7 @@ export const messages = {
     'status.sold': 'Fully sold',
     'status.confirmSold': 'Mark {ticker} as fully sold? This deletes its saved {shares} shares and {cost} cost.',
 
-    'stock.held': '{shares} shares · {cost} avg cost',
+    'stock.held': '{shares} shares · {cost} cost per share · {total} total cost',
     'stock.noPrice': 'Sync market prices to see unrealized profit',
     'stock.price': '{price} price · {value} value',
     'stock.priceOn': '{price} price on {day} · {value} value',
@@ -341,7 +341,7 @@ export const messages = {
     'status.sold': 'ขายหมดแล้ว',
     'status.confirmSold': 'ระบุว่า {ticker} ขายหมดแล้วใช่ไหม ระบบจะลบจำนวน {shares} หุ้น และต้นทุน {cost} ที่บันทึกไว้',
 
-    'stock.held': '{shares} หุ้น · ต้นทุนเฉลี่ย {cost}',
+    'stock.held': '{shares} หุ้น · ต้นทุนต่อหุ้น {cost} · ต้นทุนรวม {total}',
     'stock.noPrice': 'อัปเดตราคาจากตลาดเพื่อดูกำไรที่ยังไม่รับรู้',
     'stock.price': 'ราคา {price} · มูลค่า {value}',
     'stock.priceOn': 'ราคา {price} เมื่อ {day} · มูลค่า {value}',

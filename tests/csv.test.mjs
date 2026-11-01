@@ -93,7 +93,15 @@ test('a blank amount leaves the price out', () => {
 
 test('a blank total cost comes from the cost per share', () => {
   assert.equal(readHoldings([entry('AAA', '200', '', '', '1.25')]).rows[0].total_cost_usd, 250);
-  assert.equal(readHoldings([entry('AAA', '3', '', '', '1.1111')]).rows[0].total_cost_usd, 3.33);
+  assert.equal(readHoldings([entry('AAA', '3', '', '', '1.1111')]).rows[0].total_cost_usd, 3.3333);
+  assert.equal(readHoldings([entry('AAA', '0.1', '', '', '3')]).rows[0].total_cost_usd, 0.3);
+});
+
+test('figures are kept exactly as typed', () => {
+  const [row] = readHoldings([entry('AAA', '0.123456', '98.765', '', '800.1234')]).rows;
+  assert.deepEqual(row, {
+    ticker: 'AAA', shares: 0.123456, total_cost_usd: 98.765, cost_per_share_usd: 800.1234,
+  });
 });
 
 test('a total cost given wins over the cost per share', () => {
@@ -118,7 +126,7 @@ test('typed figures replace the saved ones', () => {
 test('a cost per share alone is a partial change', () => {
   const [row] = readHoldings([entry('AAA', '', '', '', '3')], saved).rows;
   assert.deepEqual(row, {
-    ticker: 'AAA', shares: 10, total_cost_usd: 30, partial: true,
+    ticker: 'AAA', shares: 10, total_cost_usd: 30, cost_per_share_usd: 3, partial: true,
   });
 });
 
@@ -248,6 +256,7 @@ const account = {
       ticker: 'AAA',
       shares: 2,
       total_cost_usd: 10,
+      cost_per_share_usd: 5.1234,
       updated_at: '2026-01-03T00:00:00.000Z',
       current_price_usd: 6,
       price_updated_at: '2026-01-04T00:00:00.000Z',

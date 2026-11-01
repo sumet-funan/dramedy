@@ -335,3 +335,39 @@ test('rows are processed by time whatever order they arrive in', () => {
   ];
   assert.equal(summarize(rows).stocks[0].realized, 5000);
 });
+
+const exactStock = (holding, trades = []) => summarize(trades, {}, { AAA: holding }).stocks[0];
+
+test('figures from the holdings form stay exactly as given', () => {
+  const stock = exactStock({
+    shares: 0.5,
+    total_cost_usd: 33.123,
+    cost_per_share_usd: 66.2461,
+    current_price_usd: 41.03,
+    updated_at: '2026-12-01T00:00:00Z',
+  });
+  assert.equal(stock.totalCost, 33.123);
+  assert.equal(stock.perShare, 66.2461);
+  assert.equal(stock.valueUsd, 20.515);
+  assert.equal(stock.unrealizedUsd, -12.608);
+});
+
+test('a holding saved without a cost per share has none to show', () => {
+  const stock = exactStock({ shares: 2, total_cost_usd: 10, updated_at: '2026-12-01T00:00:00Z' });
+  assert.equal(stock.perShare, null);
+  assert.equal(stock.valueUsd, null);
+  assert.equal(stock.unrealizedUsd, null);
+});
+
+test('later trades replace the given figures with worked out ones', () => {
+  const stock = exactStock({
+    shares: 10,
+    total_cost_usd: 100,
+    cost_per_share_usd: 10,
+    updated_at: '2026-01-01T00:00:00Z',
+  }, [{
+    occurred_at: '2026-02-01T00:00:00Z', type: 'buy', ticker: 'AAA', amount_usd: -30, shares: 2,
+  }]);
+  assert.equal(stock.totalCost, 130);
+  assert.equal(stock.perShare, null);
+});

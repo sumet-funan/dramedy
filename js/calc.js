@@ -5,8 +5,11 @@ export const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
 const FEE_TYPES = new Set(['fee_sec', 'fee_taf', 'fee_cat']);
 const MONEY_MOVE_TYPES = new Set(['deposit', 'withdrawal', 'fx_in', 'fx_out']);
 const EPSILON_SHARES = 0.000001;
+// Enough to clear binary float noise without touching any real digit.
+const USD_PLACES = 10;
 
 export const toCents = (value) => Math.round(Number(value) * 100);
+const exactUsd = (value) => Number(value.toFixed(USD_PLACES));
 
 // Thailand has no daylight saving, so a fixed offset is always correct.
 export const monthOf = (iso) =>
@@ -121,9 +124,15 @@ function holdingResult(trades, holding) {
     };
   }
 
+  // Figures moved by later trades are worked out. Otherwise they stay as given.
+  const rolled = carriesOn && later.length > 0;
+  const totalCost = rolled ? exactUsd(cost / 100) : Number(holding.total_cost_usd);
+  const perShare = rolled ? null : holding.cost_per_share_usd ?? null;
+
   const costLeft = Math.round(cost);
   const price = holding.current_price_usd ?? null;
   const marketValue = price === null ? null : Math.round(shares * Number(price) * 100);
+  const valueUsd = price === null ? null : exactUsd(shares * Number(price));
 
   return {
     exact: true,
@@ -132,10 +141,14 @@ function holdingResult(trades, holding) {
     status: 'holding',
     sharesHeld: shares,
     costLeft,
+    totalCost,
+    perShare: perShare === null ? null : Number(perShare),
     price: price === null ? null : Number(price),
     priceUpdatedAt: holding.price_updated_at ?? null,
     marketValue,
+    valueUsd,
     unrealized: marketValue === null ? null : marketValue - costLeft,
+    unrealizedUsd: valueUsd === null ? null : exactUsd(valueUsd - totalCost),
     updatedAt: holding.updated_at,
     outdated: !carriesOn,
     sales: [...opening, ...sales],
