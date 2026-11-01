@@ -1,6 +1,7 @@
-// Returns the latest market price of each stock the signed-in owner holds. The
-// tickers come from the database under the caller's own token, so row level
-// security decides who gets an answer and this can't be used as an open proxy.
+// Returns the latest market price of each stock the signed-in owner holds, and the
+// latest USD/THB rate. The tickers come from the database under the caller's own
+// token, so row level security decides who gets an answer and this can't be used
+// as an open proxy.
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -8,6 +9,7 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const ALLOWED_ORIGINS = ['https://sumet-funan.github.io', 'http://localhost:4173'];
 const QUOTE_TIMEOUT_MS = 8000;
 const QUOTES_AT_ONCE = 5;
+const USD_THB_SYMBOL = 'THB=X';
 
 function corsHeaders(request: Request) {
   const origin = request.headers.get('Origin') ?? '';
@@ -27,25 +29,38 @@ async function heldTickers(authorization: string): Promise<string[] | null> {
   return rows.map((row) => row.ticker);
 }
 
-// Yahoo writes share classes with a dash, as in BRK-B.
-async function quote(ticker: string): Promise<number | null> {
+// deno-lint-ignore no-explicit-any
+async function marketMeta(symbol: string): Promise<any> {
   try {
-    const symbol = encodeURIComponent(ticker.replaceAll('.', '-'));
     const response = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1d&interval=1d`,
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`,
       {
         headers: { 'User-Agent': 'Mozilla/5.0' },
         signal: AbortSignal.timeout(QUOTE_TIMEOUT_MS),
       },
     );
     if (!response.ok) return null;
-
-    const meta = (await response.json())?.chart?.result?.[0]?.meta;
-    const price = Number(meta?.regularMarketPrice);
-    return meta?.currency === 'USD' && price > 0 ? price : null;
+    return (await response.json())?.chart?.result?.[0]?.meta ?? null;
   } catch {
     return null;
   }
+}
+
+// Yahoo writes share classes with a dash, as in BRK-B.
+async function quote(ticker: string): Promise<number | null> {
+  const meta = await marketMeta(ticker.replaceAll('.', '-'));
+  const price = Number(meta?.regularMarketPrice);
+  return meta?.currency === 'USD' && price > 0 ? price : null;
+}
+
+// The time is when the market set this rate, which over a weekend is days ago.
+async function usdThb(): Promise<{ rate: number; at: string } | null> {
+  const meta = await marketMeta(USD_THB_SYMBOL);
+  const rate = Number(meta?.regularMarketPrice);
+  const seconds = Number(meta?.regularMarketTime);
+  return meta?.currency === 'THB' && rate > 0 && seconds > 0
+    ? { rate, at: new Date(seconds * 1000).toISOString() }
+    : null;
 }
 
 // A few at a time, because the market site limits bursts from shared addresses.
@@ -69,7 +84,10 @@ Deno.serve(async (request) => {
   const tickers = await heldTickers(request.headers.get('Authorization') ?? '');
   if (tickers === null) return reply({ error: 'Not signed in' }, 401);
 
-  const results = await quotes(tickers);
+  const { rateOnly } = await request.json().catch(() => ({ rateOnly: false }));
+  if (rateOnly) return reply({ usdThb: await usdThb() });
+
+  const [results, rate] = await Promise.all([quotes(tickers), usdThb()]);
   const prices: Record<string, number> = {};
   const failed: string[] = [];
   tickers.forEach((ticker, index) => {
@@ -78,5 +96,5 @@ Deno.serve(async (request) => {
     else prices[ticker] = price;
   });
 
-  return reply({ prices, failed });
+  return reply({ prices, failed, usdThb: rate });
 });

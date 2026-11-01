@@ -6,6 +6,7 @@ import { DUPLICATE_ROW, findDuplicates, sharesToFill } from './duplicates.js';
 const PAGE_SIZE = 1000;
 const IMPORT_CHUNK = 200;
 const CONFLICT_COLUMNS = 'user_id,occurred_at,type,ticker,amount_usd';
+const DEMO_USD_THB = 31.75;
 
 export function createSupabaseStore(client, userId) {
   async function setPrices(prices) {
@@ -92,6 +93,14 @@ export function createSupabaseStore(client, userId) {
       const { data, error } = await client.functions.invoke('market-prices');
       if (error) throw error;
       return data;
+    },
+
+    async fetchRate() {
+      const { data, error } = await client.functions.invoke('market-prices', {
+        body: { rateOnly: true },
+      });
+      if (error) throw error;
+      return data.usdThb;
     },
 
     // Only the listed stocks change. Prices are saved separately so a row without
@@ -192,7 +201,14 @@ export function createDemoStore({ transactions, statuses, holdings }) {
         const price = row.current_price_usd ?? row.total_cost_usd / row.shares;
         return [ticker, Math.round(price * 101) / 100];
       });
-      return { prices: Object.fromEntries(prices), failed: [] };
+      return {
+        prices: Object.fromEntries(prices),
+        failed: [],
+        usdThb: await this.fetchRate(),
+      };
+    },
+    async fetchRate() {
+      return { rate: DEMO_USD_THB, at: new Date().toISOString() };
     },
     async saveHoldings(listed, takenAt) {
       const now = new Date().toISOString();

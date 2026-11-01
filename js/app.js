@@ -4,6 +4,10 @@ import {
 } from './calc.js';
 import { CHECK_FIELDS, firstChecks, settleChecks } from './checks.js';
 import {
+  CURRENCIES, bahtText, rateNeedsCheck, rateText, saveCurrency, saveRate, savedCurrency, savedRate,
+  usdText,
+} from './currency.js';
+import {
   costsAgree, isPositiveType, needsTicker, normalizeRow, parseBackup, parseCsv, readHoldings,
   toBackup, toCsv, usesShares,
 } from './csv.js';
@@ -44,9 +48,13 @@ const VIEWS = [
 
 const STOCK_FILTERS = ['all', 'review', 'holding', 'sold'];
 const HELP_TERMS = [
-  'perShare', 'total', 'price', 'value', 'trades', 'unrealized', 'realized', 'status',
+  'perShare', 'total', 'price', 'value', 'trades', 'unrealized', 'realized', 'baht', 'status',
 ];
 const ADD_MODES = ['trade', 'holdings'];
+// Pages with figures, which say what rate their baht comes from.
+const RATE_NOTE_VIEWS = ['overview', 'stocks', 'trades'];
+// A late rate only redraws pages with nothing to type in, so it can't take the focus.
+const REDRAWN_FOR_RATE = ['overview', 'stocks'];
 
 // Long enough for a browser to finish fetching a saved file.
 const DOWNLOAD_WINDOW_MS = 60000;
@@ -82,6 +90,8 @@ const state = {
   summary: null,
   notice: null,
   animate: true,
+  currency: savedCurrency(),
+  rate: savedRate(),
 };
 
 // Builds elements with textContent only, so imported text can never become markup.
@@ -102,8 +112,10 @@ function h(tag, props = {}, ...children) {
   return element;
 }
 
-const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-const money = (cents) => usd.format(cents / 100);
+const showingBaht = () => state.currency === 'THB';
+// USD, for what must match Dime or a form. `shown` is for reading, in either currency.
+const money = usdText;
+const shown = (cents) => (showingBaht() ? bahtText(cents, state.rate.rate) : usdText(cents));
 const shareText = (shares) => shares.toLocaleString('en-US', { maximumSignificantDigits: 15 });
 
 // Shows every digit a figure has, with at least the two of a dollar amount.
@@ -120,6 +132,7 @@ const signedExact = (value) => {
   return `${sign}${exactMoney(Math.abs(value))}`;
 };
 const signedMoney = (cents) => `${cents > 0 ? '+' : ''}${money(cents)}`;
+const signedShown = (cents) => `${cents > 0 ? '+' : ''}${shown(cents)}`;
 const toneOf = (cents) => (cents > 0 ? 'gain' : cents < 0 ? 'loss' : '');
 
 // Rebuilt when the language changes, because they are slow to create per row.
@@ -208,6 +221,45 @@ function clearAccount() {
   });
 }
 
+// A failed check leaves the saved rate, and the note shows how old that is.
+async function checkRate() {
+  if (!rateNeedsCheck(state.rate, Date.now())) return false;
+  try {
+    return rememberRate(await state.store.fetchRate());
+  } catch {
+    return false;
+  }
+}
+
+// The demo's rate is made up, so it must never reach what real sign-ins read.
+function rememberRate(rate) {
+  if (!rate) return false;
+  state.rate = { ...rate, checkedAt: new Date().toISOString() };
+  if (!isDemo) saveRate(state.rate);
+  return true;
+}
+
+async function freshenRate() {
+  const { store } = state;
+  const changed = await checkRate();
+  if (changed && store === state.store && REDRAWN_FOR_RATE.includes(state.view)) render();
+}
+
+// Only a first switch has to wait, because after that a saved rate can show at once.
+async function pickCurrency(currency) {
+  if (currency === 'THB' && !state.rate) await checkRate();
+  if (currency === 'THB' && !state.rate) {
+    setNotice('bad', t('currency.noRate'));
+    render();
+    return;
+  }
+
+  state.currency = currency;
+  saveCurrency(currency);
+  render();
+  if (showingBaht()) freshenRate();
+}
+
 async function refresh() {
   const { transactions, statuses, holdings } = await state.store.load();
   state.transactions = transactions;
@@ -253,6 +305,23 @@ function languageSwitch(show) {
     }, short)));
 }
 
+function currencySwitch() {
+  return h('div', { class: 'segmented language', role: 'group', 'aria-label': t('currency') },
+    CURRENCIES.map((id) => h('button', {
+      type: 'button',
+      'aria-label': t(`currency.${id}`),
+      'aria-pressed': id === state.currency ? 'true' : 'false',
+      onClick: () => pickCurrency(id),
+    }, id)));
+}
+
+function rateNote() {
+  return h('p', { class: 'rate-note' }, t('currency.note', {
+    rate: rateText(state.rate.rate),
+    date: formats.date.format(new Date(state.rate.at)),
+  }));
+}
+
 function tabBar() {
   return h('nav', { class: 'tabbar', 'aria-label': t('sections') },
     VIEWS.map((item) => h('button', {
@@ -273,7 +342,8 @@ function render() {
     h('div', { class: 'title-row' },
       h('h1', { class: 'large-title' }, title),
       isDemo && h('span', { class: 'badge' }, t('demo')),
-      languageSwitch(render)),
+      h('div', { class: 'title-switches' }, currencySwitch(), languageSwitch(render))),
+    showingBaht() && RATE_NOTE_VIEWS.includes(view.id) && rateNote(),
     view.render());
   state.animate = false;
 
@@ -334,7 +404,7 @@ function monthlyChart(monthly) {
     return h('li', { class: 'bar-row' },
       h('span', { class: 'bar-month' }, monthLabel(item.month)),
       h('span', { class: 'bar-track' }, bar),
-      h('span', { class: 'bar-value' }, signedMoney(item.cents)));
+      h('span', { class: 'bar-value' }, signedShown(item.cents)));
   }));
 }
 
@@ -369,7 +439,7 @@ function renderOverview() {
   return h('div', { class: 'stack' },
     h('section', { class: 'hero' },
       h('div', { class: 'hero-label' }, icon('overview'), t('hero.label')),
-      h('div', { class: 'hero-value' }, signedMoney(s.totalProfit)),
+      h('div', { class: 'hero-value' }, signedShown(s.totalProfit)),
       h('div', { class: 'hero-hint' }, t('hero.hint'))),
 
     s.needsReview > 0 && h('button', {
@@ -387,23 +457,23 @@ function renderOverview() {
     icon('chevron')),
 
     h('section', { class: 'tiles' },
-      s.heldCount > 0 && tile(t('overall.label'), signedMoney(s.overall), overallHint(s), 'wide'),
-      tile(t('tile.realized'), signedMoney(s.realized), t('tile.realizedHint')),
+      s.heldCount > 0 && tile(t('overall.label'), signedShown(s.overall), overallHint(s), 'wide'),
+      tile(t('tile.realized'), signedShown(s.realized), t('tile.realizedHint')),
       s.heldCount > 0 && tile(
         t('tile.unrealized'),
-        s.pricedCount > 0 ? signedMoney(s.unrealized) : '—',
+        s.pricedCount > 0 ? signedShown(s.unrealized) : '—',
         pricedHint(s),
       ),
       s.heldCount > 0 && tile(
         t('tile.marketValue'),
-        s.pricedCount > 0 ? money(s.marketValue) : '—',
+        s.pricedCount > 0 ? shown(s.marketValue) : '—',
         pricedHint(s),
       ),
-      tile(t('tile.invested'), money(s.stillInvested), t('tile.investedHint')),
-      tile(t('tile.cash'), money(s.cash), t('tile.cashHint')),
-      tile(t('tile.moneyAdded'), money(s.moneyAdded), t('tile.moneyAddedHint')),
-      tile(t('tile.dividends'), signedMoney(s.dividends + s.tax), t('tile.dividendsHint')),
-      tile(t('tile.fees'), money(Math.abs(s.fees + s.refunds)), t('tile.feesHint'))),
+      tile(t('tile.invested'), shown(s.stillInvested), t('tile.investedHint')),
+      tile(t('tile.cash'), shown(s.cash), t('tile.cashHint')),
+      tile(t('tile.moneyAdded'), shown(s.moneyAdded), t('tile.moneyAddedHint')),
+      tile(t('tile.dividends'), signedShown(s.dividends + s.tax), t('tile.dividendsHint')),
+      tile(t('tile.fees'), shown(Math.abs(s.fees + s.refunds)), t('tile.feesHint'))),
 
     section(
       t('chart.title'),
@@ -468,15 +538,26 @@ function priceFacts(stock) {
     : t('stock.price', facts);
 }
 
+// The USD lines stay beside baht, exact, because they are what Dime lists.
+function bahtFacts(stock) {
+  const cost = shown(stock.costLeft);
+  return stock.marketValue === null
+    ? t('stock.bahtCost', { cost })
+    : t('stock.baht', { cost, value: shown(stock.marketValue) });
+}
+
 function stockAmounts(stock) {
   if (stock.fromHolding) {
     const hasPrice = stock.unrealized !== null;
+    const exact = hasPrice ? signedExact(stock.unrealizedUsd) : exactMoney(stock.totalCost);
+    const baht = hasPrice ? signedShown(stock.unrealized) : shown(stock.costLeft);
     return [
       h('span', { class: `row-amount ${hasPrice ? toneOf(stock.unrealized) : ''}` },
-        hasPrice ? signedExact(stock.unrealizedUsd) : exactMoney(stock.totalCost)),
+        showingBaht() ? baht : exact),
+      showingBaht() && h('span', { class: 'row-subtitle' }, exact),
       h('span', { class: 'row-subtitle' }, t(hasPrice ? 'stock.unrealized' : 'stock.invested')),
       stock.realized !== null && h('span', { class: `row-amount small ${toneOf(stock.realized)}` },
-        signedMoney(stock.realized)),
+        signedShown(stock.realized)),
       stock.realized !== null && h('span', { class: 'row-subtitle' }, t('stock.realized')),
     ];
   }
@@ -484,13 +565,13 @@ function stockAmounts(stock) {
   const hasProfit = stock.realized !== null;
   return [
     h('span', { class: `row-amount ${hasProfit ? toneOf(stock.realized) : ''}` },
-      hasProfit ? signedMoney(stock.realized) : money(stock.costLeft)),
+      hasProfit ? signedShown(stock.realized) : shown(stock.costLeft)),
     h('span', { class: 'row-subtitle' }, t(hasProfit ? 'stock.profit' : 'stock.invested')),
   ];
 }
 
 function stockRow(stock) {
-  const trades = t('stock.trades', { bought: money(stock.bought), sold: money(stock.sold) });
+  const trades = t('stock.trades', { bought: shown(stock.bought), sold: shown(stock.sold) });
   const usesTradeShares = stock.exact && !stock.fromHolding;
 
   return h('li', { class: 'row stock-row' },
@@ -499,6 +580,7 @@ function stockRow(stock) {
       h('span', { class: 'row-title' }, stock.ticker),
       stock.fromHolding && h('span', { class: 'row-subtitle strong' }, heldFacts(stock)),
       stock.fromHolding && h('span', { class: 'row-subtitle' }, priceFacts(stock)),
+      stock.fromHolding && showingBaht() && h('span', { class: 'row-subtitle' }, bahtFacts(stock)),
       h('span', { class: 'row-subtitle' }, trades),
       usesTradeShares && stock.sharesHeld > 0 && h('span', { class: 'row-subtitle' },
         t('stock.sharesHeld', { shares: shareText(stock.sharesHeld) })),
@@ -523,7 +605,8 @@ function syncPrices(event) {
     const held = new Set(
       state.summary.stocks.filter((stock) => stock.fromHolding).map((stock) => stock.ticker),
     );
-    const { prices, failed } = await state.store.fetchPrices();
+    const { prices, failed, usdThb } = await state.store.fetchPrices();
+    rememberRate(usdThb);
     const changes = Object.entries(prices)
       .filter(([ticker]) => held.has(ticker))
       .map(([ticker, price]) => ({ ticker, price }));
@@ -613,8 +696,9 @@ function tradeRow(tx, rerender) {
     h('span', { class: 'row-main' },
       h('span', { class: 'row-title' }, label),
       h('span', { class: 'row-subtitle' }, formats.date.format(new Date(tx.occurred_at)))),
-    h('span', { class: `row-amount ${cents > 0 ? 'gain' : ''}` }, signedMoney(cents))),
+    h('span', { class: `row-amount ${cents > 0 ? 'gain' : ''}` }, signedShown(cents))),
     isOpen && h('div', { class: 'trade-detail' },
+      showingBaht() && h('p', {}, t('trade.usdAmount', { amount: signedMoney(cents) })),
       tx.shares && h('p', {}, t('trade.shares', { shares: shareText(Number(tx.shares)) })),
       tx.note && h('p', {}, tx.note),
       h('button', {
@@ -1665,6 +1749,7 @@ async function openApp(session) {
     await refresh();
     state.animate = true;
     render();
+    if (showingBaht()) freshenRate();
     return true;
   } catch (error) {
     renderLogin(describeError(error));
@@ -1681,6 +1766,7 @@ async function start() {
     state.store = createDemoStore(demoData);
     await refresh();
     render();
+    if (showingBaht()) freshenRate();
     return;
   }
 

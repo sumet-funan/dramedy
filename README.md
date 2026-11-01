@@ -75,6 +75,14 @@ and asks Yahoo Finance's public chart endpoint, which is unofficial and can stop
 working without notice. Prices are the latest regular market price, usually
 delayed, so they can differ a little from the broker's.
 
+## Currency
+
+Everything is saved and entered in USD, as Dime lists it. The USD/THB switch only
+changes how figures are shown, at the latest market rate from the same function
+(`THB=X`, checked at most hourly, and kept in the browser). A baht figure is the USD
+figure × that one rate, so it isn't what the money cost in baht on the day, and it
+isn't Dime's rate. The holding figures stay exact in USD beside the baht ones.
+
 ## Database
 
 Schema and access rules are in `supabase/migrations`.

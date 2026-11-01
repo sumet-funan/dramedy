@@ -292,9 +292,10 @@ button {
 
 .title-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   margin-bottom: 14px;
 }
 
@@ -1409,6 +1410,19 @@ label.row:focus-within {
 }
 
 .trade-count {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+/* Currency */
+.title-switches {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.rate-note {
+  margin: -6px 0 14px;
   font-size: 13px;
   color: var(--ink-3);
 }
