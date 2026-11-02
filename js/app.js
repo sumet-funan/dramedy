@@ -19,6 +19,7 @@ import {
 import { icon } from './icons.js';
 import { readTradeImages } from './ocr.js';
 import { createDemoStore, createSupabaseStore } from './store.js';
+import { newTickers, tickerLines } from './ticker-check.js';
 import { matchesPeriod, periodOptions, settlePeriod } from './trade-filter.js';
 import { readTradeRows } from './trade-screen.js';
 
@@ -92,6 +93,7 @@ const state = {
   animate: true,
   currency: savedCurrency(),
   rate: savedRate(),
+  unknownTickers: new Set(),
 };
 
 // Builds elements with textContent only, so imported text can never become markup.
@@ -218,6 +220,7 @@ function clearAccount() {
     holdings: {},
     summary: null,
     notice: null,
+    unknownTickers: new Set(),
   });
 }
 
@@ -588,6 +591,8 @@ function stockRow(stock) {
         icon('alert'), t('stock.oversold')),
       stock.outdated && h('span', { class: 'row-warning' },
         icon('alert'), t('stock.outdated')),
+      stock.fromHolding && state.unknownTickers.has(stock.ticker) && h('span', { class: 'row-warning' },
+        icon('alert'), t('stock.unknown')),
       usesTradeShares
         ? h('span', { class: 'row-subtitle' }, t('stock.fromShares'))
         : statusPicker(stock)),
@@ -605,8 +610,12 @@ function syncPrices(event) {
     const held = new Set(
       state.summary.stocks.filter((stock) => stock.fromHolding).map((stock) => stock.ticker),
     );
-    const { prices, failed, usdThb } = await state.store.fetchPrices();
+    const {
+      prices, failed, missing = [], usdThb,
+    } = await state.store.fetchPrices();
     rememberRate(usdThb);
+    // Kept until the page closes, because a ticker's name isn't saved anywhere.
+    state.unknownTickers = new Set(missing.filter((ticker) => held.has(ticker)));
     const changes = Object.entries(prices)
       .filter(([ticker]) => held.has(ticker))
       .map(([ticker, price]) => ({ ticker, price }));
@@ -859,12 +868,64 @@ function confirmSimilar(rows) {
   return confirm(`${plural('data.confirmSimilar', similar.length)}\n\n${[...lines, ...more].join('\n')}`);
 }
 
+const knownTickers = () => new Set(state.summary.stocks.map((stock) => stock.ticker));
+
+// When the market can't be asked, saving goes on, and the tickers say so.
+async function lookUpNewTickers(rows) {
+  const tickers = newTickers(rows, knownTickers());
+  if (tickers.length === 0) return [];
+  try {
+    return tickerLines(await state.store.lookupTickers(tickers), tickers);
+  } catch {
+    return tickerLines({}, tickers);
+  }
+}
+
+const tickerText = ({ kind, name }) => (kind === 'found' ? name : t(`tickers.${kind}`));
+
+// A real but wrong ticker passes every other check, so each new one is shown with
+// its company name and needs a yes every time.
+function confirmTickers(lines) {
+  if (lines.length === 0) return true;
+  const list = lines.map((line) => `${line.ticker} · ${tickerText(line)}`);
+  return confirm(`${t('tickers.confirm')}\n\n${list.join('\n')}`);
+}
+
+// Turned back, the rows with those tickers show what was found, to be put right.
+function markTickers(items, lines) {
+  for (const item of items) {
+    // A trade row keeps a hidden ticker when its type takes none.
+    const type = fieldOf(item, 'type');
+    const line = (!type || needsTicker(type.value))
+      && lines.find(({ ticker }) => ticker === tickerOf(item));
+    if (line) markRow(item, `${t('tickers.row')} ${tickerText(line)}`);
+  }
+  items.find((item) => item.classList.contains('bad'))?.scrollIntoView({ block: 'center' });
+}
+
+// Asking the market takes a moment, so the button says so and can't be pressed twice.
+async function whileChecking(button, task) {
+  const label = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = t('tickers.checking');
+  }
+  try {
+    return await task();
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+}
+
 const importedText = ({ added, filled }, total) => [
   t('data.imported', { added, skipped: total - added }),
   filled > 0 && t('data.filled', { count: filled }),
 ].filter(Boolean).join(' ');
 
-function submitTrade(event) {
+async function submitTrade(event) {
   event.preventDefault();
   const form = new FormData(event.target);
   const type = form.get('type');
@@ -898,6 +959,8 @@ function submitTrade(event) {
     render();
     return;
   }
+  const lines = await whileChecking(event.submitter, () => lookUpNewTickers([row]));
+  if (!confirmTickers(lines)) return;
   if (confirmSimilar([row])) {
     run(() => state.store.add(row), () => {
       state.manualTrade = null;
@@ -1216,7 +1279,7 @@ function tradeReview() {
     }
   };
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
     if (!readyToSave(list)) return;
 
@@ -1233,6 +1296,12 @@ function tradeReview() {
     }
 
     const rows = results.map(({ row }) => row);
+    const lines = await whileChecking(save, () => lookUpNewTickers(rows));
+    showProgress();
+    if (!confirmTickers(lines)) {
+      markTickers(items, lines);
+      return;
+    }
     if (!confirmSimilar(rows)) return;
 
     run(() => state.store.importRows(rows), (saved) => {
@@ -1385,6 +1454,7 @@ async function importFile(event) {
     return;
   }
 
+  if (!confirmTickers(await lookUpNewTickers(rows))) return;
   if (!confirmSimilar(rows)) return;
 
   await run(
@@ -1570,7 +1640,7 @@ function holdingsForm() {
     if (problems.length > 0) rows[problems[0].index].scrollIntoView({ block: 'center' });
   };
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
     if (!readyToSave(list)) return;
 
@@ -1592,6 +1662,13 @@ function holdingsForm() {
       return;
     }
     show('');
+
+    const found = await whileChecking(save, () => lookUpNewTickers(rows));
+    showWaiting(list, save, t('holdings.save'));
+    if (!confirmTickers(found)) {
+      markTickers([...list.children], found);
+      return;
+    }
 
     const lines = rows.map((row) => changeLine(row, saved[row.ticker]));
     if (confirm(`${t('holdings.confirm')}\n\n${lines.join('\n')}${unrealizedCheck(entries)}`)) {

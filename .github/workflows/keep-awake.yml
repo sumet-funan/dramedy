@@ -1,0 +1,33 @@
+# The free Supabase plan pauses a project after about a week without requests, and
+# the app is used about once a week. A signed-out read every three days keeps it
+# awake. A signed-out caller isn't allowed to read the table, so no data moves.
+name: Keep database awake
+
+on:
+  schedule:
+    - cron: '17 3 */3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: js/config.js
+          sparse-checkout-cone-mode: false
+      # Both values are public and live in js/config.js, so they're read from there.
+      - name: Read from the database
+        run: |
+          url=$(grep -oE "https://[a-z0-9]+\.supabase\.co" js/config.js)
+          key=$(grep -oE "sb_publishable_[A-Za-z0-9_-]+" js/config.js)
+          answer=$(curl -s --max-time 30 \
+            -H "apikey: $key" "$url/rest/v1/stock_status?select=ticker&limit=1")
+          echo "$answer"
+          # Permission denied (42501) comes from Postgres itself, so the database
+          # is up. A paused or broken project fails the run, and GitHub emails the owner.
+          echo "$answer" | grep -q '"42501"'

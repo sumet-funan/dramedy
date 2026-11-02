@@ -75,6 +75,20 @@ and asks Yahoo Finance's public chart endpoint, which is unofficial and can stop
 working without notice. Prices are the latest regular market price, usually
 delayed, so they can differ a little from the broker's.
 
+## Ticker checks
+
+A misread ticker can still be a real one, so any ticker new to the account is looked
+up through the same function before it's saved, whether it came from a screenshot,
+the trade form, the holdings form or a CSV. The viewer sees each company name, or
+that the US market doesn't know the ticker, and has to say yes. If the market can't
+be reached, saving still works and the ticker shows as not checked. Syncing prices
+checks held stocks again and warns on any the market doesn't know. Company names
+aren't saved.
+
+`.github/workflows/keep-awake.yml` reads the database signed out every three days,
+because the free plan pauses a project after about a week without requests. GitHub
+stops scheduled runs in a repository with no activity for 60 days.
+
 ## Currency
 
 Everything is saved and entered in USD, as Dime lists it. The USD/THB switch only

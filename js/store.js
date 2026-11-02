@@ -7,6 +7,8 @@ const PAGE_SIZE = 1000;
 const IMPORT_CHUNK = 200;
 const CONFLICT_COLUMNS = 'user_id,occurred_at,type,ticker,amount_usd';
 const DEMO_USD_THB = 31.75;
+// The demo's market knows any ticker of up to four letters.
+const DEMO_LISTED = /^[A-Z]{1,4}$/;
 
 export function createSupabaseStore(client, userId) {
   async function setPrices(prices) {
@@ -101,6 +103,14 @@ export function createSupabaseStore(client, userId) {
       });
       if (error) throw error;
       return data.usdThb;
+    },
+
+    async lookupTickers(tickers) {
+      const { data, error } = await client.functions.invoke('market-prices', {
+        body: { lookup: tickers },
+      });
+      if (error) throw error;
+      return data;
     },
 
     // Only the listed stocks change. Prices are saved separately so a row without
@@ -204,7 +214,16 @@ export function createDemoStore({ transactions, statuses, holdings }) {
       return {
         prices: Object.fromEntries(prices),
         failed: [],
+        missing: [],
         usdThb: await this.fetchRate(),
+      };
+    },
+    async lookupTickers(tickers) {
+      const listed = tickers.filter((ticker) => DEMO_LISTED.test(ticker));
+      return {
+        names: Object.fromEntries(listed.map((ticker) => [ticker, `${ticker} Demo Company`])),
+        missing: tickers.filter((ticker) => !listed.includes(ticker)),
+        failed: [],
       };
     },
     async fetchRate() {
