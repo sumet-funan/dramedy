@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { monthOf, summarize } from '../js/calc.js';
+import { holdingsTakenAt, monthOf, summarize } from '../js/calc.js';
 
 const tx = (occurred_at, type, ticker, amount_usd, shares = null) => ({
   occurred_at, type, ticker, amount_usd, shares,
@@ -370,4 +370,41 @@ test('later trades replace the given figures with worked out ones', () => {
   }]);
   assert.equal(stock.totalCost, 130);
   assert.equal(stock.perShare, null);
+});
+
+test('holdings typed to the minute cover that whole minute', () => {
+  const later = Date.parse('2026-03-01T00:00:00Z');
+  assert.equal(holdingsTakenAt('2026-02-14T09:30', later), '2026-02-14T02:30:59.000Z');
+  assert.equal(holdingsTakenAt('2026-02-14T09:30:00', later), '2026-02-14T02:30:59.000Z');
+});
+
+test('holdings typed to the second stay at that second', () => {
+  const later = Date.parse('2026-03-01T00:00:00Z');
+  assert.equal(holdingsTakenAt('2026-02-14T09:30:07', later), '2026-02-14T02:30:07.000Z');
+});
+
+test('holdings typed for the current minute never land in the future', () => {
+  const now = Date.parse('2026-02-14T02:30:20Z');
+  assert.equal(holdingsTakenAt('2026-02-14T09:30', now), '2026-02-14T02:30:20.000Z');
+});
+
+test('holdings typed for a future time stay there, to be refused', () => {
+  const now = Date.parse('2026-02-14T02:30:20Z');
+  assert.equal(holdingsTakenAt('2026-02-14T09:45', now), '2026-02-14T02:45:00.000Z');
+});
+
+test('a trade later in the same minute is part of minute-typed holdings', () => {
+  const later = Date.parse('2026-03-01T00:00:00Z');
+  const holding = {
+    ticker: 'NOVA',
+    shares: 2,
+    total_cost_usd: 61.5,
+    updated_at: holdingsTakenAt('2026-02-14T09:30', later),
+  };
+  const buy = {
+    occurred_at: '2026-02-14T02:30:12Z', type: 'buy', ticker: 'NOVA', amount_usd: -61.6, shares: null,
+  };
+  const [stock] = summarize([buy], {}, { NOVA: holding }).stocks;
+  assert.equal(stock.outdated, false);
+  assert.equal(stock.sharesHeld, 2);
 });

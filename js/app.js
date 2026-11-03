@@ -1,6 +1,6 @@
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from './config.js';
 import {
-  BANGKOK_OFFSET_MS, monthOf, summarize, toCents,
+  BANGKOK_OFFSET_MS, holdingsTakenAt, monthOf, summarize, toCents,
 } from './calc.js';
 import { CHECK_FIELDS, firstChecks, settleChecks } from './checks.js';
 import {
@@ -1655,7 +1655,7 @@ function holdingsForm() {
     }
     // Left alone, the figures are as of the moment they're saved.
     const takenAt = state.holdingAsOf
-      ? new Date(`${state.holdingAsOf}+07:00`).toISOString()
+      ? holdingsTakenAt(state.holdingAsOf, Date.now())
       : new Date().toISOString();
     if (Date.parse(takenAt) > Date.now()) {
       show(t('holdings.failed', { errors: t('holdings.futureAsOf') }));

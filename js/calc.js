@@ -16,6 +16,20 @@ export const dayOf = (iso) =>
   new Date(Date.parse(iso) + BANGKOK_OFFSET_MS).toISOString().slice(0, 10);
 export const monthOf = (iso) => dayOf(iso).slice(0, 7);
 
+const MINUTE_END_MS = 59 * 1000;
+
+// When typed holdings figures were true, from a Bangkok time picker value. Phone
+// pickers only show minutes, which leaves the seconds at zero and would put a trade
+// made later in that same minute after the figures. So a time with no seconds
+// covers its whole minute, though never past now. A time in the future stays as
+// typed, so it can still be refused.
+export function holdingsTakenAt(typed, now) {
+  const start = Date.parse(`${typed}+07:00`);
+  const seconds = typed.match(/T\d{2}:\d{2}:(\d{2})/)?.[1] ?? '00';
+  const end = seconds === '00' && start <= now ? Math.min(start + MINUTE_END_MS, now) : start;
+  return new Date(end).toISOString();
+}
+
 const byTime = (a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at);
 
 const tradeTotals = (trades) => ({
